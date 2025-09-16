@@ -37,12 +37,24 @@ SEARCHES = [
         "name": "falownik",
         "url": "https://www.olx.pl/oferty/q-falownik/",
         "forbidden_words": [
-            "fotowoltaiczny", "fotowoltaika", "fotowoltaiki", "fotowoltaicznej",
-            "solar", "solarny", "magazyn energii", "mikroinwerter", "inverter",
-            "off-grid", "on-grid", "off grid", "on grid",
+            "fotowoltaiczny", "fotowoltaika", "fotowoltaiki", "fotowoltaicznej", "pv", "fotowoltaiczne", "fotowoltaiczna",
+            "solar", "solarny", "magazyn energii", "mikroinwerter", "wifi",
+            "off-grid", "on-grid", "off grid", "on grid", "offgrid", "ongrid",
             "hybrydowy", "hybrydowa", "solaredge", "deye", "growatt", "huawei",
             "sofar", "sma", "fox", "foxess", "fronius", "mppt", "easun",
-            "sinuspro", "anern", "jebao", "godwe", "goodwe"
+            "sinuspro", "anern", "jebao", "godwe", "goodwe", "afore", "solis",
+            "solax", "akwarium", "samochód", "toyota", "kia", "tunze", "opel",
+            "audi", "volkswagen", "nissan", "victron", "solplanet", "sunny", "boy", "sunny boy", 
+            "growat", "solax", "hypontech", "kempingowy", "suszarka", "pralka", "pompa ciepła",
+            "anenji", "mercedes", "prius", "betoniarka", "słoneczne", "słoneczny", "volt polska",
+            "cyrkulator", "ups", "akwariowa", "frezarka", "tokarka", "daye", "hoymiles", "dokio",
+            "mieszkanie", "victron", "peleciarka", "samochodowa", "peugeot", "renault", "wavemaker",
+            "bmw", "suzuki", "kodak", "kostal", "fox", "suszarke", "pralke", "ibo", "rolmasaż",
+            "hypnotech", "greencell", "green cell", "masażer", "rubik", "lexus", "motech", "ford",
+            "blaupunkt", "rollmasaż", "volvo", "still", "kamper", "bank energii", "zoe", "eclipse cross",
+            "turystyczny", 
+
+            
         ],
         "required_words": [],  # jeżeli pusta -> brak wymagań, inaczej co najmniej 1 musi występować
         "max_price": None,     # liczba lub None
@@ -67,6 +79,10 @@ CLIENT_ID = os.environ.get("ONEDRIVE_CLIENT_ID")
 REFRESH_TOKEN = os.environ.get("ONEDRIVE_REFRESH_TOKEN")
 TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 ONEDRIVE_UPLOAD_FOLDER = os.environ.get("ONEDRIVE_UPLOAD_FOLDER", "olx")
+
+# App definition
+MAX_PAGES = 30
+MAX_EMPTY_PAGES = 2
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -384,9 +400,9 @@ def main():
 
         # Crawl first N pages (safeguard)
         page = 1
-        max_pages = 30
+        max_pages = MAX_PAGES
         empty_pages = 0
-        while page <= max_pages and empty_pages < 2:
+        while page <= max_pages and empty_pages < MAX_EMPTY_PAGES:
             paged = base_url
             if "?" in base_url:
                 paged = base_url + f"&page={page}"
