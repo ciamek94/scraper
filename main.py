@@ -25,9 +25,10 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import openpyxl
 from collections import defaultdict
+import re
 from dotenv import load_dotenv
 
-#load_dotenv()
+load_dotenv()
 
 # --- Config (edytowalne) ---
 # Lista wyszukiwań: każde wyszukiwanie to dict z 'name', 'url' i filtrami
@@ -35,19 +36,26 @@ SEARCHES = [
     {
         "name": "falownik",
         "url": "https://www.olx.pl/oferty/q-falownik/",
-        "forbidden_words": ["pośrednik", "hurtownia", "serwis"],   # jeżeli występuje w tytule/desc -> odrzuć
+        "forbidden_words": [
+            "fotowoltaiczny", "fotowoltaika", "fotowoltaiki", "fotowoltaicznej",
+            "solar", "solarny", "magazyn energii", "mikroinwerter", "inverter",
+            "off-grid", "on-grid", "off grid", "on grid",
+            "hybrydowy", "hybrydowa", "solaredge", "deye", "growatt", "huawei",
+            "sofar", "sma", "fox", "foxess", "fronius", "mppt", "easun",
+            "sinuspro", "anern", "jebao", "godwe", "goodwe"
+        ],
         "required_words": [],  # jeżeli pusta -> brak wymagań, inaczej co najmniej 1 musi występować
         "max_price": None,     # liczba lub None
         "min_price": None
     },
-    {
-        "name": "sprężarka",
-        "url": "https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Brubowa/",
-        "forbidden_words": ["wynajem", "uszkodzony", "części"],
-        "required_words": [],
-        "max_price": None,
-        "min_price": None
-    }
+    # {
+    #     "name": "sprężarka",
+    #     "url": "https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Brubowa/",
+    #     "forbidden_words": ["wynajem"],
+    #     "required_words": [],
+    #     "max_price": None,
+    #     "min_price": None
+    # }
 ]
 
 # Gdzie tymczasowo zapiszemy pliki lokalnie w runnerze
@@ -262,21 +270,31 @@ def parse_listing_page(html):
     return description, image_url
 
 # Filter check
+def normalize_text(text):
+    # małe litery, usuń znaki specjalne, zamień kilka spacji na jedną
+    text = text.lower()
+    text = re.sub(r'[^a-z0-9\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
 def passes_filters(item, search_conf):
-    text = (item.get("title","") + " " + item.get("description","")).lower()
+    text = normalize_text(item.get("title","") + " " + item.get("description",""))
+
     # forbidden words
     for bad in search_conf.get("forbidden_words", []):
-        if bad.lower() in text:
+        bad_norm = normalize_text(bad)
+        if bad_norm in text:
             return False
+
     # required words
     reqs = search_conf.get("required_words", [])
     if reqs:
-        if not any(r.lower() in text for r in reqs):
+        if not any(normalize_text(r) in text for r in reqs):
             return False
+
     # price filter (best effort)
     price = item.get("price","")
     if price:
-        # try to extract number
         digits = "".join(ch for ch in price if ch.isdigit())
         if digits:
             try:
@@ -290,6 +308,7 @@ def passes_filters(item, search_conf):
             except Exception:
                 pass
     return True
+
 
 # Load local state (seen links)
 def load_state_local():
@@ -365,7 +384,7 @@ def main():
 
         # Crawl first N pages (safeguard)
         page = 1
-        max_pages = 5
+        max_pages = 30
         empty_pages = 0
         while page <= max_pages and empty_pages < 2:
             paged = base_url
