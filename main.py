@@ -35,7 +35,17 @@ load_dotenv()
 SEARCHES = [
     {
         "name": "falownik",
-        "url": "https://www.olx.pl/oferty/q-falownik/",
+        "urls": [
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:to%5D=200",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=200&search%5Bfilter_float_price:to%5D=400",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=400&search%5Bfilter_float_price:to%5D=700",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=700&search%5Bfilter_float_price:to%5D=1000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1000&search%5Bfilter_float_price:to%5D=1400",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1400&search%5Bfilter_float_price:to%5D=2000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2000&search%5Bfilter_float_price:to%5D=3000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=3000&search%5Bfilter_float_price:to%5D=4000"
+
+        ],
         "forbidden_words": [
             "fotowoltaiczny", "fotowoltaika", "fotowoltaiki", "fotowoltaicznej", "pv", "fotowoltaiczne", "fotowoltaiczna",
             "solar", "solarny", "magazyn energii", "mikroinwerter", "wifi",
@@ -81,7 +91,7 @@ TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 ONEDRIVE_UPLOAD_FOLDER = os.environ.get("ONEDRIVE_UPLOAD_FOLDER", "olx")
 
 # App definition
-MAX_PAGES = 40
+MAX_PAGES = 30
 MAX_EMPTY_PAGES = 2
 
 # Telegram
@@ -385,102 +395,93 @@ def main():
     if existing_df is None:
         existing_df = pd.DataFrame()
 
-    all_rows = []  # accumulate rows (existing + new)
-    if not existing_df.empty:
-        all_rows = existing_df.to_dict(orient="records")
-    else:
-        all_rows = []
-
+    all_rows = existing_df.to_dict(orient="records") if not existing_df.empty else []
     new_found = []
+
     # For each search
     for search_conf in SEARCHES:
         name = search_conf["name"]
-        base_url = search_conf["url"]
-        print(f"🔎 Searching '{name}' at {base_url}")
+        urls = search_conf.get("urls", [search_conf.get("url")])  # wspiera oba warianty
 
-        # Crawl first N pages (safeguard)
-        page = 1
-        max_pages = MAX_PAGES
-        empty_pages = 0
-        while page <= max_pages and empty_pages < MAX_EMPTY_PAGES:
-            paged = base_url
-            if "?" in base_url:
-                paged = base_url + f"&page={page}"
-            else:
-                paged = base_url + f"?page={page}"
-            print(" - fetching", paged)
-            r = get_with_retry(paged)
-            if r is None:
-                print("  ⚠️ failed to fetch page", page)
-                empty_pages += 1
-                page += 1
-                time.sleep(random.uniform(1.5, 3.5))
+        for base_url in urls:
+            if not base_url:
                 continue
-            results = parse_search_page(r.text)
-            if not results:
-                empty_pages += 1
-                page += 1
-                time.sleep(random.uniform(1.0, 2.5))
-                continue
+            print(f"🔎 Searching '{name}' at {base_url}")
+
+            # Crawl first N pages (safeguard)
+            page = 1
             empty_pages = 0
-            for res in results:
-                link = res.get("link")
-                if not link:
+            while page <= MAX_PAGES and empty_pages < MAX_EMPTY_PAGES:
+                paged = base_url + (f"&page={page}" if "?" in base_url else f"?page={page}")
+                print(" - fetching", paged)
+                r = get_with_retry(paged)
+                if r is None:
+                    print("  ⚠️ failed to fetch page", page)
+                    empty_pages += 1
+                    page += 1
+                    time.sleep(random.uniform(1.5, 3.5))
                     continue
-                if link in seen:
-                    # already processed earlier
+
+                results = parse_search_page(r.text)
+                if not results:
+                    empty_pages += 1
+                    page += 1
+                    time.sleep(random.uniform(1.0, 2.5))
                     continue
-                # fetch listing page for full description and image
-                lr = get_with_retry(link)
-                if lr is None:
-                    # couldn't fetch listing page - still mark as seen to avoid retry storm
+
+                empty_pages = 0
+                for res in results:
+                    link = res.get("link")
+                    if not link or link in seen:
+                        continue
+
+                    # fetch listing page for full description and image
+                    lr = get_with_retry(link)
+                    if lr is None:
+                        seen.add(link)
+                        continue
+
+                    description, image_url = parse_listing_page(lr.text)
+                    res["description"] = description
+                    res["image"] = image_url
+                    res["search_name"] = name
+
+                    # filter checks (title + description)
+                    if not passes_filters(res, search_conf):
+                        seen.add(link)
+                        continue
+
+                    # Good new listing -> add to results
+                    row = {
+                        "Title": res.get("title", ""),
+                        "Price": res.get("price", ""),
+                        "Location/Date": res.get("loc_date", ""),
+                        "Description": res.get("description", ""),
+                        "Link": link,
+                        "Image": res.get("image"),
+                        "SearchName": name,
+                        "Notified": False,
+                        "Timestamp": int(time.time())
+                    }
+                    all_rows.append(row)
+                    new_found.append(row)
                     seen.add(link)
-                    continue
-                description, image_url = parse_listing_page(lr.text)
-                res["description"] = description
-                res["image"] = image_url
-                res["search_name"] = name
+                    time.sleep(random.uniform(0.8, 1.8))  # small delay between listing pages
 
-                # filter checks (title + description)
-                if not passes_filters(res, search_conf):
-                    # mark seen (we won't notify)
-                    seen.add(link)
-                    continue
+                page += 1
+                time.sleep(random.uniform(1.5, 3.0))  # polite delay between search pages
 
-                # Good new listing -> add to results
-                row = {
-                    "Title": res.get("title",""),
-                    "Price": res.get("price",""),
-                    "Location/Date": res.get("loc_date",""),
-                    "Description": res.get("description",""),
-                    "Link": link,
-                    "Image": res.get("image"),
-                    "SearchName": name,
-                    "Notified": False,
-                    "Timestamp": int(time.time())
-                }
-                all_rows.append(row)
-                new_found.append(row)
-                # mark seen
-                seen.add(link)
-                # small delay between listing pages
-                time.sleep(random.uniform(0.8, 1.8))
-            page += 1
-            # polite delay between search pages
-            time.sleep(random.uniform(1.5, 3.0))
-
-    # If new_found, send telegram notifications (title, price, link, image)
+    # Send Telegram notifications for new listings
     if new_found:
         print(f"🔔 New listings found: {len(new_found)} - sending notifications")
         for item in new_found:
-            title = item["Title"]
-            price = item["Price"]
-            link = item["Link"]
-            img = item.get("Image")
-            # attempt to send (ignore failures)
-            ok = send_telegram_notification(title=title, price=price, link=link, photo_url=img)
+            ok = send_telegram_notification(
+                title=item["Title"],
+                price=item["Price"],
+                link=item["Link"],
+                photo_url=item.get("Image")
+            )
             item["Notified"] = ok
-            # small pause to avoid spamming
             time.sleep(1.2 + random.random())
     else:
         print("ℹ️ No new listings that passed filters")
@@ -508,6 +509,7 @@ def main():
         print("⚠️ Skipping OneDrive upload (no token)")
 
     print("✅ Done.")
+
 
 if __name__ == "__main__":
     main()
