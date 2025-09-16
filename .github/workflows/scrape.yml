@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   schedule:
     # 5:00, 12:00, 16:00 i 20:00 scheduled
-    - cron: "0 5,12,16,20 * * *"
+  - cron: "0 3,10,14,18 * * *"
 
 jobs:
   scrape:
