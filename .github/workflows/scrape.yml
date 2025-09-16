@@ -3,8 +3,8 @@ name: OLX Scraper (scheduled)
 on:
   workflow_dispatch:
   schedule:
-    # every 30 minutes
-    - cron: '*/30 * * * *'
+    # 5:00, 12:00, 16:00 i 20:00 scheduled
+    - cron: "0 5,12,16,20 * * *"
 
 jobs:
   scrape:
