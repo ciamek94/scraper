@@ -52,7 +52,7 @@ SEARCHES = [
             "bmw", "suzuki", "kodak", "kostal", "fox", "suszarke", "pralke", "ibo", "rolmasaż",
             "hypnotech", "greencell", "green cell", "masażer", "rubik", "lexus", "motech", "ford",
             "blaupunkt", "rollmasaż", "volvo", "still", "kamper", "bank energii", "zoe", "eclipse cross",
-            "turystyczny", 
+            "turystyczny", "hyundai"
 
             
         ],
@@ -81,7 +81,7 @@ TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 ONEDRIVE_UPLOAD_FOLDER = os.environ.get("ONEDRIVE_UPLOAD_FOLDER", "olx")
 
 # App definition
-MAX_PAGES = 30
+MAX_PAGES = 40
 MAX_EMPTY_PAGES = 2
 
 # Telegram
