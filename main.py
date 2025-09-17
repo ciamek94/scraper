@@ -62,7 +62,10 @@ SEARCHES = [
             "bmw", "suzuki", "kodak", "kostal", "fox", "suszarke", "pralke", "ibo", "rolmasaż",
             "hypnotech", "greencell", "green cell", "masażer", "rubik", "lexus", "motech", "ford",
             "blaupunkt", "rollmasaż", "volvo", "still", "kamper", "bank energii", "zoe", "eclipse cross",
-            "turystyczny", "hyundai"
+            "turystyczny", "hyundai", "suszarki", "pralki", "bosh", "chevrolet", "outlander", "dewalt", "makita",
+            "milwuakee", "lodówka", "lodówki", "agregat", "spawarka", "refusol", "wilo", "glebogryzarka",
+            "rower", "hulajnoga", "zoe", "kangoo", "grundfoss", "grundfos", "mazda", "tesla", "pulsor", "dacia",
+            "walcarka"
 
             
         ],
