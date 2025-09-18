@@ -37,13 +37,13 @@ SEARCHES = [
         "name": "falownik",
         "urls": [
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:to%5D=200",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=200&search%5Bfilter_float_price:to%5D=400",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=400&search%5Bfilter_float_price:to%5D=700",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=700&search%5Bfilter_float_price:to%5D=1000",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1000&search%5Bfilter_float_price:to%5D=1400",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1400&search%5Bfilter_float_price:to%5D=2000",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2000&search%5Bfilter_float_price:to%5D=3000",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=3000&search%5Bfilter_float_price:to%5D=4000"
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=201&search%5Bfilter_float_price:to%5D=400",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=401&search%5Bfilter_float_price:to%5D=700",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=701&search%5Bfilter_float_price:to%5D=1000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1001&search%5Bfilter_float_price:to%5D=1400",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1401&search%5Bfilter_float_price:to%5D=2000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2001&search%5Bfilter_float_price:to%5D=3000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=3001&search%5Bfilter_float_price:to%5D=4000"
 
         ],
         "forbidden_words": [
