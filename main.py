@@ -62,14 +62,17 @@ SEARCHES = [
             "bmw", "suzuki", "kodak", "kostal", "fox", "suszarke", "pralke", "ibo", "rolmasaż",
             "hypnotech", "greencell", "green cell", "masażer", "rubik", "lexus", "motech", "ford",
             "blaupunkt", "rollmasaż", "volvo", "still", "kamper", "bank energii", "zoe", "eclipse cross",
-            "turystyczny", "hyundai", "suszarki", "pralki", "bosh", "chevrolet", "outlander", "dewalt", "makita",
-            "milwuakee", "lodówka", "lodówki", "agregat", "spawarka", "refusol", "wilo", "glebogryzarka",
+            "turystyczny", "hyundai", "suszarki", "pralki", "bosch", "chevrolet", "outlander", "dewalt", "makita",
+            "milwuakee", "lodówka", "lodówki", "agregat", "spawarka", "spawarki", "refusol", "wilo", "glebogryzarka",
             "rower", "hulajnoga", "hulajnogi", "zoe", "kangoo", "grundfoss", "grundfos", "mazda", "tesla", "pulsor", "dacia",
             "walcarka", "do włosów", "płyta indukcyjna", "optymalizator", "optymalizatora", "turbiny wiatrowej", "turbina wiatrowa",
             "powerstocc", "milwaukee", "akwarystyczny", "akumulator", "belkin", "samochodowy", "chrysler", "aqua", "jvp", "SSR",
             "skoda", "mostek trapezowy", "remington", "aquael", "yaris", "willo", "wkład kominowy", "einhell", "simet", "honda",
             "osram", "lokówka", "prostownica", "lunchbox", "hydroforowy", "falownica", "dell", "kotła", "dzban", "sukienka",
-            "odstraszacz", "klimatyzatora", "hybryda", "gyre"
+            "odstraszacz", "klimatyzatora", "hybryda", "gyre", "konwerter", "sun lite", "aurora", "mokka", "sunwind", "rav 4",
+            "vw id3", "vw id.3", "stecagrid", "micovert", "omnigena", "podgrzewacz", "Jaguar", "mikrofala", "tosima", "maszynka do mięsa",
+            "citroen", "jeep", "linde", "steca", "mastervolt", "wózek widłowy", "wózka widłowego", "fluke", "maszynka do mielenia", "porsche",
+            "selfa", "pompy ciepla", "maszynka alfa",
 
             
         ],
@@ -77,14 +80,14 @@ SEARCHES = [
         "max_price": None,     # liczba lub None
         "min_price": None
     },
-    # {
-    #     "name": "sprężarka",
-    #     "url": "https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Brubowa/",
-    #     "forbidden_words": ["wynajem"],
-    #     "required_words": [],
-    #     "max_price": None,
-    #     "min_price": None
-    # }
+    {
+        "name": "sprężarka",
+        "url": "https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Brubowa/?search%5Bfilter_float_price:to%5D=6000/",
+        "forbidden_words": ["wynajem"],
+        "required_words": [],
+        "max_price": None,
+        "min_price": None
+    }
 ]
 
 # Gdzie tymczasowo zapiszemy pliki lokalnie w runnerze
