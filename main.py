@@ -64,8 +64,12 @@ SEARCHES = [
             "blaupunkt", "rollmasaż", "volvo", "still", "kamper", "bank energii", "zoe", "eclipse cross",
             "turystyczny", "hyundai", "suszarki", "pralki", "bosh", "chevrolet", "outlander", "dewalt", "makita",
             "milwuakee", "lodówka", "lodówki", "agregat", "spawarka", "refusol", "wilo", "glebogryzarka",
-            "rower", "hulajnoga", "zoe", "kangoo", "grundfoss", "grundfos", "mazda", "tesla", "pulsor", "dacia",
-            "walcarka"
+            "rower", "hulajnoga", "hulajnogi", "zoe", "kangoo", "grundfoss", "grundfos", "mazda", "tesla", "pulsor", "dacia",
+            "walcarka", "do włosów", "płyta indukcyjna", "optymalizator", "optymalizatora", "turbiny wiatrowej", "turbina wiatrowa",
+            "powerstocc", "milwaukee", "akwarystyczny", "akumulator", "belkin", "samochodowy", "chrysler", "aqua", "jvp", "SSR",
+            "skoda", "mostek trapezowy", "remington", "aquael", "yaris", "willo", "wkład kominowy", "einhell", "simet", "honda",
+            "osram", "lokówka", "prostownica", "lunchbox", "hydroforowy", "falownica", "dell", "kotła", "dzban", "sukienka",
+            "odstraszacz", "klimatyzatora", "hybryda", "gyre"
 
             
         ],
@@ -383,35 +387,50 @@ def save_excel(df):
 
 # ---- Main run
 def main():
+    # Start
     print("🚀 OLX scraper starting")
     token = authenticate_onedrive() if (CLIENT_ID and REFRESH_TOKEN) else None
 
-    # Try to download previous state and excel from OneDrive (if available)
+    # Attempt to download current state + Excel from OneDrive
     if token:
         download_from_onedrive(STATE_ONEDRIVE_PATH, STATE_LOCAL, token)
+        # try to get the latest excel from OneDrive (this is the source of truth for "already seen")
         download_from_onedrive(EXCEL_ONEDRIVE_PATH, EXCEL_LOCAL, token)
 
+    # Load state and previously-seen links (state.json is auxiliary)
     state = load_state_local()
     seen = set(state.get("seen", []))
 
+    # Load existing Excel (the authoritative "history" of items)
     existing_df = load_existing_excel()
     if existing_df is None:
         existing_df = pd.DataFrame()
 
-    all_rows = existing_df.to_dict(orient="records") if not existing_df.empty else []
-    new_found = []
+    # Build mapping from Link -> row dict for quick updates
+    existing_map = {}
+    existing_links = set()
+    if not existing_df.empty and "Link" in existing_df.columns:
+        for r in existing_df.to_dict(orient="records"):
+            link = r.get("Link")
+            if link:
+                existing_map[link] = r
+                existing_links.add(link)
 
-    # For each search
+    # We'll reconstruct all_rows from existing_map (updated) + newly found rows
+    all_rows = list(existing_map.values())  # start from existing rows
+    new_found = []            # items that are new (not present in existing_df)
+    current_links_found = set()  # links found in this run (used to detect expired)
+
+    # For each configured search
     for search_conf in SEARCHES:
         name = search_conf["name"]
-        urls = search_conf.get("urls", [search_conf.get("url")])  # wspiera oba warianty
+        urls = search_conf.get("urls", [search_conf.get("url")])
 
         for base_url in urls:
             if not base_url:
                 continue
             print(f"🔎 Searching '{name}' at {base_url}")
 
-            # Crawl first N pages (safeguard)
             page = 1
             empty_pages = 0
             while page <= MAX_PAGES and empty_pages < MAX_EMPTY_PAGES:
@@ -435,12 +454,24 @@ def main():
                 empty_pages = 0
                 for res in results:
                     link = res.get("link")
-                    if not link or link in seen:
+                    if not link:
                         continue
 
-                    # fetch listing page for full description and image
+                    # Always register that this link exists on OLX now
+                    current_links_found.add(link)
+
+                    # If already processed in this run or already known in state, still we need to update current_links_found
+                    # But we only notify if the link was not in existing_links (Excel) before this run.
+                    # If link in seen (state) we may skip some network calls, but we still must check whether it still exists
+                    # (we use OLX page presence to know current_links_found; parse_search_page already found it)
+
+                    # If we've already seen this link earlier in this run, skip duplicate processing
+                    # (parse_search_page should not return duplicates typically)
+                    # Fetch listing page for full description and image (to update Excel fields)
                     lr = get_with_retry(link)
                     if lr is None:
+                        # couldn't fetch listing page - do not remove from current_links_found (we got link from listing page),
+                        # but mark as seen to avoid retry storms
                         seen.add(link)
                         continue
 
@@ -449,56 +480,102 @@ def main():
                     res["image"] = image_url
                     res["search_name"] = name
 
-                    # filter checks (title + description)
+                    # Filter checks (title + description)
                     if not passes_filters(res, search_conf):
+                        # even if filtered out we consider link "found" (so it won't be treated as expired)
                         seen.add(link)
                         continue
 
-                    # Good new listing -> add to results
-                    row = {
-                        "Title": res.get("title", ""),
-                        "Price": res.get("price", ""),
-                        "Location/Date": res.get("loc_date", ""),
-                        "Description": res.get("description", ""),
-                        "Link": link,
-                        "Image": res.get("image"),
-                        "SearchName": name,
-                        "Notified": False,
-                        "Timestamp": int(time.time())
-                    }
-                    all_rows.append(row)
-                    new_found.append(row)
+                    # If link exists in existing_map -> update that entry (price/desc/image/timestamp)
+                    if link in existing_map:
+                        # update fields in existing_map row
+                        row = existing_map[link]
+                        row["Title"] = res.get("title", row.get("Title", ""))
+                        row["Price"] = res.get("price", row.get("Price", ""))
+                        row["Location/Date"] = res.get("loc_date", row.get("Location/Date", ""))
+                        row["Description"] = res.get("description", row.get("Description", ""))
+                        row["Image"] = res.get("image", row.get("Image"))
+                        row["SearchName"] = name
+                        row["Timestamp"] = int(time.time())
+                        # ensure all_rows has the updated row (it starts from existing_map values so it's already there)
+                    else:
+                        # New link (not present in Excel) -> create a new row, add to all_rows and new_found (for Telegram)
+                        row = {
+                            "Title": res.get("title", ""),
+                            "Price": res.get("price", ""),
+                            "Location/Date": res.get("loc_date", ""),
+                            "Description": res.get("description", ""),
+                            "Link": link,
+                            "Image": res.get("image"),
+                            "SearchName": name,
+                            "Notified": False,
+                            "Timestamp": int(time.time())
+                        }
+                        all_rows.append(row)
+                        new_found.append(row)
+                        # add to existing_map so further updates within same run update it
+                        existing_map[link] = row
+                        existing_links.add(link)
+
+                    # mark seen (state) so we don't reprocess excessively in future runs
                     seen.add(link)
-                    time.sleep(random.uniform(0.8, 1.8))  # small delay between listing pages
+
+                    # small delay between listing pages
+                    time.sleep(random.uniform(0.8, 1.8))
 
                 page += 1
-                time.sleep(random.uniform(1.5, 3.0))  # polite delay between search pages
+                # polite delay between search pages
+                time.sleep(random.uniform(1.5, 3.0))
 
-    # Send Telegram notifications for new listings
-    if new_found:
-        print(f"🔔 New listings found: {len(new_found)} - sending notifications")
-        for item in new_found:
-            ok = send_telegram_notification(
-                title=item["Title"],
-                price=item["Price"],
-                link=item["Link"],
-                photo_url=item.get("Image")
-            )
-            item["Notified"] = ok
-            time.sleep(1.2 + random.random())
-    else:
-        print("ℹ️ No new listings that passed filters")
+    # At this point:
+    # - existing_map contains up-to-date rows for any link that was previously in Excel OR added this run
+    # - current_links_found contains all links that OLX reported in this run
+    # We must remove from all_rows any rows that are in the previous Excel but no longer present on OLX
 
-    # Save Excel (merge / dedupe by Link)
+    # Build final DataFrame: start from all_rows, but drop any rows that used to be in Excel and no longer exist on OLX
     df_all = pd.DataFrame(all_rows)
     if not df_all.empty:
-        df_all = df_all.drop_duplicates(subset=["Link"], keep="first").reset_index(drop=True)
+        prev_links = set(existing_df["Link"]) if (not existing_df.empty and "Link" in existing_df.columns) else set()
+
+        def keep_row(r):
+            link = r.get("Link")
+            # 🔄 If the link was in the previous Excel but is no longer found on OLX → treat as expired and remove
+            if link in prev_links and link not in current_links_found:
+                return False
+            return True
+
+        # 🔄 Remove expired rows and duplicates
+        df_all = df_all[df_all.apply(keep_row, axis=1)].drop_duplicates(subset=["Link"], keep="first").reset_index(drop=True)
+
+        # Save Excel
         save_excel(df_all)
         print("💾 Saved Excel locally:", EXCEL_LOCAL)
     else:
         print("⚠️ No rows to save")
+        df_all = pd.DataFrame()
 
-    # Save state locally and upload state + excel + new listings JSON to OneDrive
+    # 🔄 Notifications: only for listings that were NOT in the previous Excel
+    if new_found:
+        prev_links = set(existing_df["Link"]) if (not existing_df.empty and "Link" in existing_df.columns) else set()
+        to_notify = [it for it in new_found if it.get("Link") not in prev_links]
+
+        if to_notify:
+            print(f"🔔 New listings found: {len(to_notify)} - sending notifications")
+            for item in to_notify:
+                ok = send_telegram_notification(
+                    title=item["Title"],
+                    price=item["Price"],
+                    link=item["Link"],
+                    photo_url=item.get("Image")
+                )
+                item["Notified"] = ok
+                time.sleep(1.2 + random.random())
+        else:
+            print("ℹ️ New listings found but none are genuinely new compared to server Excel.")
+    else:
+        print("ℹ️ No new listings that passed filters")
+
+    # Save updated state (seen links) and upload files to OneDrive if authenticated
     state = {"seen": list(seen), "last_run": int(time.time())}
     save_state_local(state)
     with open(NEW_JSON_LOCAL, "w", encoding="utf-8") as f:
