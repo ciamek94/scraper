@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # main.py
 """
-Scraper OLX -> Excel + OneDrive + Telegram notifications.
+Scraper OLX -> Excel + OneDrive + Telegram notifications (accepted/rejected).
 
 Requirements:
   pip install requests beautifulsoup4 pandas openpyxl python-dotenv
@@ -72,7 +72,7 @@ SEARCHES = [
             "odstraszacz", "klimatyzatora", "hybryda", "gyre", "konwerter", "sun lite", "aurora", "mokka", "sunwind", "rav 4",
             "vw id3", "vw id.3", "stecagrid", "micovert", "omnigena", "podgrzewacz", "Jaguar", "mikrofala", "tosima", "maszynka do mięsa",
             "citroen", "jeep", "linde", "steca", "mastervolt", "wózek widłowy", "wózka widłowego", "fluke", "maszynka do mielenia", "porsche",
-            "selfa", "pompy ciepla", "maszynka alfa",
+            "selfa", "pompy ciepla", "maszynka alfa","kuchenka", "mikrofala", "mikrofalówka",
 
             
         ],
@@ -82,61 +82,58 @@ SEARCHES = [
     },
     {
         "name": "sprężarka",
-        "url": "https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Brubowa/?search%5Bfilter_float_price:to%5D=6000/",
-        "forbidden_words": ["wynajem"],
+        "urls": ["https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Brubowa/?search%5Bfilter_float_price:to%5D=6000",],
+        "forbidden_words": ["wynajem,"],
         "required_words": [],
         "max_price": None,
         "min_price": None
     }
 ]
 
-# Gdzie tymczasowo zapiszemy pliki lokalnie w runnerze
 WORKDIR = "output"
 os.makedirs(WORKDIR, exist_ok=True)
 
-# OneDrive settings
 CLIENT_ID = os.environ.get("ONEDRIVE_CLIENT_ID")
 REFRESH_TOKEN = os.environ.get("ONEDRIVE_REFRESH_TOKEN")
 TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 ONEDRIVE_UPLOAD_FOLDER = os.environ.get("ONEDRIVE_UPLOAD_FOLDER", "olx")
 
-# App definition
 MAX_PAGES = 30
 MAX_EMPTY_PAGES = 2
 
-# Telegram
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Filenames on OneDrive (in root or in ONEDRIVE_UPLOAD_FOLDER)
-EXCEL_ONEDRIVE_PATH = f"{ONEDRIVE_UPLOAD_FOLDER}/olx_listings.xlsx"
-STATE_ONEDRIVE_PATH = f"{ONEDRIVE_UPLOAD_FOLDER}/state.json"  # to track already-seen links
-JSON_NEW_PATH = f"{ONEDRIVE_UPLOAD_FOLDER}/new_listings.json"
+# OneDrive paths
+EXCEL_ACCEPTED_ONEDRIVE = f"{ONEDRIVE_UPLOAD_FOLDER}/accepted.xlsx"
+EXCEL_REJECTED_ONEDRIVE = f"{ONEDRIVE_UPLOAD_FOLDER}/rejected.xlsx"
+JSON_ACCEPTED_ONEDRIVE = f"{ONEDRIVE_UPLOAD_FOLDER}/accepted.json"
+JSON_REJECTED_ONEDRIVE = f"{ONEDRIVE_UPLOAD_FOLDER}/rejected.json"
+STATE_ONEDRIVE_PATH = f"{ONEDRIVE_UPLOAD_FOLDER}/state.json"
 
 # Local paths
-EXCEL_LOCAL = os.path.join(WORKDIR, "olx_listings.xlsx")
+EXCEL_ACCEPTED_LOCAL = os.path.join(WORKDIR, "accepted.xlsx")
+EXCEL_REJECTED_LOCAL = os.path.join(WORKDIR, "rejected.xlsx")
+JSON_ACCEPTED_LOCAL = os.path.join(WORKDIR, "accepted.json")
+JSON_REJECTED_LOCAL = os.path.join(WORKDIR, "rejected.json")
 STATE_LOCAL = os.path.join(WORKDIR, "state.json")
-NEW_JSON_LOCAL = os.path.join(WORKDIR, "new_listings.json")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; olx-scraper/1.0)",
     "Accept-Language": "pl-PL,pl;q=0.9"
 }
 
-# Helper: retry GET
 def get_with_retry(url, headers=HEADERS, retries=4, backoff=2.0):
     for i in range(retries):
         try:
             r = requests.get(url, headers=headers, timeout=15)
             if r.status_code == 200:
                 return r
-            # handle 429 or others by waiting
-        except Exception as e:
+        except Exception:
             pass
         time.sleep(backoff * (1 + random.random()))
     return None
 
-# OneDrive: authenticate using refresh token (public client, no client_secret needed)
 def authenticate_onedrive():
     if not CLIENT_ID or not REFRESH_TOKEN:
         print("⚠️ OneDrive credentials not set.")
@@ -151,23 +148,18 @@ def authenticate_onedrive():
         r = requests.post(TOKEN_URL, data=data, timeout=20)
         r.raise_for_status()
         print("✅ OneDrive auth successful. Access token obtained.")
-        return r.json()  # używaj token['access_token'] do uploadu
+        return r.json()
     except requests.exceptions.RequestException as e:
         print("❌ OneDrive auth failed:", e, r.text if 'r' in locals() else "")
         return None
 
-
-# OneDrive: upload file
 def upload_to_onedrive_localpath(local_path, onedrive_path, token):
-    """Upload file to OneDrive path (creates or replaces). onedrive_path example: 'folder/file.ext'"""
     if token is None:
         print("⚠️ No OneDrive token, skipping upload:", onedrive_path)
         return False
     access_token = token['access_token']
     upload_url = f'https://graph.microsoft.com/v1.0/me/drive/root:/{onedrive_path}:/content'
-    headers = {
-        'Authorization': f"Bearer {access_token}"
-    }
+    headers = {'Authorization': f"Bearer {access_token}"}
     with open(local_path, "rb") as f:
         data = f.read()
     r = requests.put(upload_url, headers=headers, data=data, timeout=60)
@@ -178,16 +170,13 @@ def upload_to_onedrive_localpath(local_path, onedrive_path, token):
         print("❌ Upload failed:", r.status_code, r.text)
         return False
 
-# OneDrive: download to local (returns True if success)
 def download_from_onedrive(onedrive_path, local_path, token):
     if token is None:
         print("⚠️ No OneDrive token, cannot download", onedrive_path)
         return False
     access_token = token['access_token']
     url = f'https://graph.microsoft.com/v1.0/me/drive/root:/{onedrive_path}:/content'
-    headers = {
-        'Authorization': f'Bearer {access_token}'
-    }
+    headers = {'Authorization': f'Bearer {access_token}'}
     r = requests.get(url, headers=headers, timeout=60)
     if r.status_code == 200:
         with open(local_path, "wb") as f:
@@ -198,32 +187,25 @@ def download_from_onedrive(onedrive_path, local_path, token):
         print("ℹ️ File not found on OneDrive (or download failed):", onedrive_path, r.status_code)
         return False
 
-# Telegram: send message with photo (if photo_url present, try sendPhoto; else fallback to sendMessage)
 def send_telegram_notification(title, price, link, photo_url=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("⚠️ Telegram not configured — skipping notification.")
         return False
     base = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
     caption = f"<b>{title}</b>\n{price}\n{link}"
-    # Try sending photo
     if photo_url:
-        send_photo_url = f"{base}/sendPhoto"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "photo": photo_url,
-            "caption": caption,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False
-        }
         try:
-            r = requests.post(send_photo_url, data=payload, timeout=15)
+            r = requests.post(f"{base}/sendPhoto", data={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "photo": photo_url,
+                "caption": caption,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": False
+            }, timeout=15)
             if r.status_code == 200:
                 return True
-            else:
-                print("ℹ️ sendPhoto failed, status:", r.status_code, r.text)
-        except Exception as e:
-            print("ℹ️ sendPhoto error:", e)
-    # Fallback to sendMessage
+        except Exception:
+            pass
     try:
         r = requests.post(f"{base}/sendMessage", data={
             "chat_id": TELEGRAM_CHAT_ID,
@@ -231,83 +213,54 @@ def send_telegram_notification(title, price, link, photo_url=None):
             "parse_mode": "HTML",
             "disable_web_page_preview": False
         }, timeout=10)
-        if r.status_code == 200:
-            return True
-        else:
-            print("❌ sendMessage failed:", r.status_code, r.text)
-            return False
-    except Exception as e:
-        print("❌ sendMessage exception:", e)
+        return r.status_code == 200
+    except Exception:
         return False
 
-# Utility: clean price string to readable (simple)
 def clean_price(price_str):
     if not price_str:
         return ""
     return price_str.replace("\n", " ").strip()
 
-# Parse search result page: find cards and extract minimal data (title, link, price)
 def parse_search_page(html):
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.find_all("div", {"data-cy": "l-card"})
     results = []
     for card in cards:
-        # title
         title_elem = card.select_one('div[data-cy="ad-card-title"] h4')
         title = title_elem.get_text(strip=True) if title_elem else ""
-
-        # link
         link_elem = card.find("a", href=True)
         link = link_elem["href"] if link_elem else ""
         if link and not link.startswith("http"):
             link = "https://www.olx.pl" + link
-
-        # price
         price_elem = card.find("p", {"data-testid": "ad-price"})
         price = clean_price(price_elem.get_text(strip=True)) if price_elem else ""
-
-        # location & date
         loc_date_elem = card.find("p", {"data-testid": "location-date"})
         loc_date = loc_date_elem.get_text(" ", strip=True) if loc_date_elem else ""
-
-        results.append({
-            "title": title,
-            "link": link,
-            "price": price,
-            "loc_date": loc_date
-        })
+        results.append({"title": title, "link": link, "price": price, "loc_date": loc_date})
     return results
 
-# Parse single listing page: get description and main image (if any)
 def parse_listing_page(html):
     soup = BeautifulSoup(html, "html.parser")
-    # description
     desc_elem = soup.find("div", {"data-cy": "ad_description"})
     if not desc_elem:
-        # sometimes it's different - fallback to any description tag
         desc_elem = soup.find("div", {"class": lambda x: x and "description" in x})
     description = desc_elem.get_text(" ", strip=True) if desc_elem else ""
-
-    # main image - try to find meta og:image first
     image_url = None
     meta_img = soup.find("meta", property="og:image")
     if meta_img and meta_img.has_attr("content"):
         image_url = meta_img["content"]
     else:
-        # try to find images carousel
         img = soup.find("img", {"class": lambda x: x and ("swiper" in x or "image" in x or "gallery" in x)})
         if img and img.has_attr("src"):
             image_url = img["src"]
         else:
-            # generic find first <img> within gallery
             gallery_img = soup.select_one("div.photos img")
             if gallery_img and gallery_img.has_attr("src"):
                 image_url = gallery_img["src"]
     return description, image_url
 
-# Filter check
 def normalize_text(text):
-    # małe litery, usuń znaki specjalne, zamień kilka spacji na jedną
     text = text.lower()
     text = re.sub(r'[^a-z0-9\s]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
@@ -315,20 +268,12 @@ def normalize_text(text):
 
 def passes_filters(item, search_conf):
     text = normalize_text(item.get("title","") + " " + item.get("description",""))
-
-    # forbidden words
     for bad in search_conf.get("forbidden_words", []):
-        bad_norm = normalize_text(bad)
-        if bad_norm in text:
+        if normalize_text(bad) in text:
             return False
-
-    # required words
     reqs = search_conf.get("required_words", [])
-    if reqs:
-        if not any(normalize_text(r) in text for r in reqs):
-            return False
-
-    # price filter (best effort)
+    if reqs and not any(normalize_text(r) in text for r in reqs):
+        return False
     price = item.get("price","")
     if price:
         digits = "".join(ch for ch in price if ch.isdigit())
@@ -345,85 +290,73 @@ def passes_filters(item, search_conf):
                 pass
     return True
 
-
-# Load local state (seen links)
-def load_state_local():
-    if os.path.exists(STATE_LOCAL):
+# Load/Save helpers for Excel/JSON
+def load_json(path):
+    if os.path.exists(path):
         try:
-            with open(STATE_LOCAL, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
-            return {"seen": []}
-    return {"seen": []}
+            return []
+    return []
 
-def save_state_local(state):
-    with open(STATE_LOCAL, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+def save_json(data, path):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-# Merge with existing Excel (if exists)
-def load_existing_excel():
-    if os.path.exists(EXCEL_LOCAL):
+def load_excel(path):
+    if os.path.exists(path):
         try:
-            return pd.read_excel(EXCEL_LOCAL)
+            return pd.read_excel(path)
         except Exception:
             return pd.DataFrame()
     return pd.DataFrame()
 
-def save_excel(df):
-    df.to_excel(EXCEL_LOCAL, index=False)
-    # autosize columns quickly (simple)
+def save_excel(df, path):
+    df.to_excel(path, index=False)
     try:
-        wb = openpyxl.load_workbook(EXCEL_LOCAL)
+        wb = openpyxl.load_workbook(path)
         ws = wb.active
         for col in ws.columns:
-            max_len = 0
-            col_letter = col[0].column_letter
-            for cell in col:
-                if cell.value:
-                    l = len(str(cell.value))
-                    if l > max_len:
-                        max_len = l
-            ws.column_dimensions[col_letter].width = max_len + 2
-        wb.save(EXCEL_LOCAL)
+            max_len = max((len(str(cell.value)) for cell in col if cell.value), default=0)
+            ws.column_dimensions[col[0].column_letter].width = max_len + 2
+        wb.save(path)
     except Exception as e:
         print("⚠️ autosize failed:", e)
 
-# ---- Main run
+# ---- Main run ----
 def main():
     print("🚀 OLX scraper starting")
     token = authenticate_onedrive() if (CLIENT_ID and REFRESH_TOKEN) else None
 
-    # Attempt to download current state + Excel from OneDrive
+    # Download previous state + Excel/JSONs
     if token:
         download_from_onedrive(STATE_ONEDRIVE_PATH, STATE_LOCAL, token)
-        download_from_onedrive(EXCEL_ONEDRIVE_PATH, EXCEL_LOCAL, token)
+        download_from_onedrive(EXCEL_ACCEPTED_ONEDRIVE, EXCEL_ACCEPTED_LOCAL, token)
+        download_from_onedrive(EXCEL_REJECTED_ONEDRIVE, EXCEL_REJECTED_LOCAL, token)
+        download_from_onedrive(JSON_ACCEPTED_ONEDRIVE, JSON_ACCEPTED_LOCAL, token)
+        download_from_onedrive(JSON_REJECTED_ONEDRIVE, JSON_REJECTED_LOCAL, token)
 
-    # Load state and previously-seen links (state.json is auxiliary)
-    state = load_state_local()
-    seen = set(state.get("seen", []))
+    state = load_json(STATE_LOCAL) or {"seen": [], "last_prices": {}, "last_run": int(time.time())}
+
+    accepted_json = load_json(JSON_ACCEPTED_LOCAL)
+    rejected_json = load_json(JSON_REJECTED_LOCAL)
+    accepted_df = load_excel(EXCEL_ACCEPTED_LOCAL)
+    rejected_df = load_excel(EXCEL_REJECTED_LOCAL)
+
+    accepted_map = {row['Link']: row for row in accepted_json}
+    rejected_map = {row['Link']: row for row in rejected_json}
+
     last_prices = state.get("last_prices", {})
 
-    # Load existing Excel (the authoritative "history" of items)
-    existing_df = load_existing_excel()
-    existing_map = {}
-    existing_links = set()
-    if not existing_df.empty and "Link" in existing_df.columns:
-        for r in existing_df.to_dict(orient="records"):
-            link = r.get("Link")
-            if link:
-                existing_map[link] = r
-                existing_links.add(link)
-
-    all_rows = list(existing_map.values())
-    new_found = []
-    price_changed = []
     current_links_found = set()
+    new_accepted = []
+    new_rejected = []
+    price_changed = []
 
-    # For each configured search
     for search_conf in SEARCHES:
         name = search_conf["name"]
         urls = search_conf.get("urls", [search_conf.get("url")])
-
         for base_url in urls:
             if not base_url:
                 continue
@@ -436,7 +369,6 @@ def main():
                 print(" - fetching", paged)
                 r = get_with_retry(paged)
                 if r is None:
-                    print("  ⚠️ failed to fetch page", page)
                     empty_pages += 1
                     page += 1
                     time.sleep(random.uniform(1.5, 3.5))
@@ -456,101 +388,83 @@ def main():
                         continue
 
                     current_links_found.add(link)
+                    # Sprawdzenie w accepted/rejected bez pobierania strony
+                    price = res.get("price")
+                    in_accepted = link in accepted_map and accepted_map[link]["Price"] == price
+                    in_rejected = link in rejected_map and rejected_map[link]["Price"] == price
+                    price_diff = link in accepted_map and accepted_map[link]["Price"] != price
 
-                    # Jeśli link był już widziany i cena się nie zmieniła, pomiń pobieranie strony
-                    prev_row = existing_map.get(link)
-                    prev_price = last_prices.get(link)
-                    if link in seen and prev_row and prev_price == res.get("price"):
-                        # nadal zarejestruj obecność, ale pomiń pobieranie
+                    if in_accepted or in_rejected:
+                        # pomiń pobieranie strony
                         continue
 
-                    # Fetch listing page for full description and image
+                    # fetch listing page
                     lr = get_with_retry(link)
                     if lr is None:
-                        seen.add(link)
                         continue
-
                     description, image_url = parse_listing_page(lr.text)
                     res["description"] = description
                     res["image"] = image_url
                     res["search_name"] = name
 
-                    # Filter checks (title + description)
-                    if not passes_filters(res, search_conf):
-                        seen.add(link)
-                        continue
-
-                    # If link exists in existing_map -> update that entry
-                    if link in existing_map:
-                        row = existing_map[link]
-                        old_price = row.get("Price")
-                        row["Title"] = res.get("title", row.get("Title", ""))
-                        row["Price"] = res.get("price", old_price)
-                        row["Location/Date"] = res.get("loc_date", row.get("Location/Date", ""))
-                        row["Description"] = res.get("description", row.get("Description", ""))
-                        row["Image"] = res.get("image", row.get("Image"))
-                        row["SearchName"] = name
-                        row["Timestamp"] = int(time.time())
-
-                        # Sprawdzenie zmiany ceny
-                        if old_price != res.get("price"):
-                            price_changed.append(row)
-                    else:
-                        # New link -> create a new row
+                    if passes_filters(res, search_conf):
+                        # accepted
                         row = {
-                            "Title": res.get("title", ""),
-                            "Price": res.get("price", ""),
-                            "Location/Date": res.get("loc_date", ""),
-                            "Description": res.get("description", ""),
+                            "Title": res.get("title",""),
+                            "Price": price,
+                            "Location/Date": res.get("loc_date",""),
+                            "Description": res.get("description",""),
                             "Link": link,
                             "Image": res.get("image"),
                             "SearchName": name,
                             "Notified": False,
                             "Timestamp": int(time.time())
                         }
-                        all_rows.append(row)
-                        new_found.append(row)
-                        existing_map[link] = row
-                        existing_links.add(link)
+                        accepted_json.append(row)
+                        accepted_map[link] = row
+                        new_accepted.append(row)
+                        if price_diff:
+                            row["Title"] += " ⚠️ Price changed"
+                            price_changed.append(row)
+                    else:
+                        # rejected
+                        row = {
+                            "Title": res.get("title",""),
+                            "Price": price,
+                            "Location/Date": res.get("loc_date",""),
+                            "Description": description,
+                            "Link": link,
+                            "Image": image_url,
+                            "SearchName": name,
+                            "Timestamp": int(time.time())
+                        }
+                        rejected_json.append(row)
+                        rejected_map[link] = row
+                        new_rejected.append(row)
 
-                    # mark seen (state)
-                    seen.add(link)
-                    last_prices[link] = res.get("price")
-
+                    last_prices[link] = price
                     time.sleep(random.uniform(0.8, 1.8))
-
                 page += 1
                 time.sleep(random.uniform(1.5, 3.0))
 
-    # Build final DataFrame: start from all_rows, but drop any rows that used to be in Excel and no longer exist on OLX
-    df_all = pd.DataFrame(all_rows)
-    if not df_all.empty:
-        prev_links = set(existing_df["Link"]) if (not existing_df.empty and "Link" in existing_df.columns) else set()
+    # Usuń ogłoszenia, które już nie istnieją
+    def filter_existing(json_list):
+        return [row for row in json_list if row["Link"] in current_links_found]
 
-        def keep_row(r):
-            link = r.get("Link")
-            if link in prev_links and link not in current_links_found:
-                return False
-            return True
+    if state.get("last_run"):  # tylko jeśli nie pierwsze uruchomienie
+        accepted_json = filter_existing(accepted_json)
+        rejected_json = filter_existing(rejected_json)
 
-        df_all = df_all[df_all.apply(keep_row, axis=1)].drop_duplicates(subset=["Link"], keep="first").reset_index(drop=True)
-        save_excel(df_all)
-        print("💾 Saved Excel locally:", EXCEL_LOCAL)
-    else:
-        print("⚠️ No rows to save")
-        df_all = pd.DataFrame()
+    # Zapis lokalny
+    save_json(accepted_json, JSON_ACCEPTED_LOCAL)
+    save_json(rejected_json, JSON_REJECTED_LOCAL)
+    save_excel(pd.DataFrame(accepted_json), EXCEL_ACCEPTED_LOCAL)
+    save_excel(pd.DataFrame(rejected_json), EXCEL_REJECTED_LOCAL)
 
-    # 🔄 Notifications: new or price-changed listings
-    to_notify = []
-    if new_found:
-        to_notify.extend(new_found)
-    if price_changed:
-        for row in price_changed:
-            row["Title"] += " ⚠️ Price changed"
-            to_notify.append(row)
-
+    # 🔄 Notifications
+    to_notify = new_accepted + price_changed
     if to_notify:
-        print(f"🔔 New listings found or price changed: {len(to_notify)} - sending notifications")
+        print(f"🔔 New accepted listings or price changes: {len(to_notify)} - sending notifications")
         for item in to_notify:
             ok = send_telegram_notification(
                 title=item["Title"],
@@ -561,39 +475,22 @@ def main():
             item["Notified"] = ok
             time.sleep(1.2 + random.random())
     else:
-        print("ℹ️ No new listings or price changes")
+        print("ℹ️ No new accepted listings or price changes")
 
-    # Save updated state (seen links + prices) and upload files to OneDrive
-    state = {"seen": list(seen), "last_prices": last_prices, "last_run": int(time.time())}
-    save_state_local(state)
-    with open(NEW_JSON_LOCAL, "w", encoding="utf-8") as f:
-        json.dump(to_notify, f, ensure_ascii=False, indent=2)
+    # Aktualizacja stanu i upload do OneDrive
+    state = {"seen": list(current_links_found), "last_prices": last_prices, "last_run": int(time.time())}
+    save_json(state, STATE_LOCAL)
 
     if token:
-        upload_to_onedrive_localpath(EXCEL_LOCAL, EXCEL_ONEDRIVE_PATH, token)
+        upload_to_onedrive_localpath(EXCEL_ACCEPTED_LOCAL, EXCEL_ACCEPTED_ONEDRIVE, token)
+        upload_to_onedrive_localpath(EXCEL_REJECTED_LOCAL, EXCEL_REJECTED_ONEDRIVE, token)
+        upload_to_onedrive_localpath(JSON_ACCEPTED_LOCAL, JSON_ACCEPTED_ONEDRIVE, token)
+        upload_to_onedrive_localpath(JSON_REJECTED_LOCAL, JSON_REJECTED_ONEDRIVE, token)
         upload_to_onedrive_localpath(STATE_LOCAL, STATE_ONEDRIVE_PATH, token)
-        upload_to_onedrive_localpath(NEW_JSON_LOCAL, JSON_NEW_PATH, token)
     else:
         print("⚠️ Skipping OneDrive upload (no token)")
 
     print("✅ Done.")
-
-
-    # Save updated state (seen links) and upload files to OneDrive if authenticated
-    state = {"seen": list(seen), "last_run": int(time.time())}
-    save_state_local(state)
-    with open(NEW_JSON_LOCAL, "w", encoding="utf-8") as f:
-        json.dump(new_found, f, ensure_ascii=False, indent=2)
-
-    if token:
-        upload_to_onedrive_localpath(EXCEL_LOCAL, EXCEL_ONEDRIVE_PATH, token)
-        upload_to_onedrive_localpath(STATE_LOCAL, STATE_ONEDRIVE_PATH, token)
-        upload_to_onedrive_localpath(NEW_JSON_LOCAL, JSON_NEW_PATH, token)
-    else:
-        print("⚠️ Skipping OneDrive upload (no token)")
-
-    print("✅ Done.")
-
 
 if __name__ == "__main__":
     main()
