@@ -21,11 +21,11 @@ import time
 import random
 import json
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 import openpyxl
-from collections import defaultdict
 import re
+from bs4 import BeautifulSoup
+from collections import defaultdict
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,12 +37,14 @@ SEARCHES = [
         "name": "falownik",
         "urls": [
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:to%5D=200",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=201&search%5Bfilter_float_price:to%5D=400",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=401&search%5Bfilter_float_price:to%5D=700",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=201&search%5Bfilter_float_price:to%5D=300",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=301&search%5Bfilter_float_price:to%5D=500",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=501&search%5Bfilter_float_price:to%5D=700",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=701&search%5Bfilter_float_price:to%5D=1000",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1001&search%5Bfilter_float_price:to%5D=1400",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1401&search%5Bfilter_float_price:to%5D=2000",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2001&search%5Bfilter_float_price:to%5D=3000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2001&search%5Bfilter_float_price:to%5D=2500",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2501&search%5Bfilter_float_price:to%5D=3000",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=3001&search%5Bfilter_float_price:to%5D=4000"
 
         ],
@@ -72,7 +74,7 @@ SEARCHES = [
             "odstraszacz", "klimatyzatora", "hybryda", "gyre", "konwerter", "sun lite", "aurora", "mokka", "sunwind", "rav 4",
             "vw id3", "vw id.3", "stecagrid", "micovert", "omnigena", "podgrzewacz", "Jaguar", "mikrofala", "tosima", "maszynka do mięsa",
             "citroen", "jeep", "linde", "steca", "mastervolt", "wózek widłowy", "wózka widłowego", "fluke", "maszynka do mielenia", "porsche",
-            "selfa", "pompy ciepla", "maszynka alfa","kuchenka", "mikrofala", "mikrofalówka",
+            "selfa", "pompy ciepla", "maszynka alfa","kuchenka", "mikrofala", "mikrofalówka", "evershine"
 
             
         ],
@@ -82,7 +84,7 @@ SEARCHES = [
     },
     {
         "name": "sprężarka",
-        "urls": ["https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Brubowa/?search%5Bfilter_float_price:to%5D=6000",],
+        "urls": ["https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Srubowa/?search%5Bfilter_float_price:to%5D=6000",],
         "forbidden_words": ["wynajem,"],
         "required_words": [],
         "max_price": None,
@@ -224,20 +226,45 @@ def clean_price(price_str):
 
 def parse_search_page(html):
     soup = BeautifulSoup(html, "html.parser")
-    cards = soup.find_all("div", {"data-cy": "l-card"})
+    # Collect all possible ad containers (l-card, ad-card-title, premium-ad-card, any with "card" in data-cy)
+    cards = soup.find_all("div", {"data-cy": re.compile(r"card")})
     results = []
     for card in cards:
-        title_elem = card.select_one('div[data-cy="ad-card-title"] h4')
-        title = title_elem.get_text(strip=True) if title_elem else ""
+        # link + title
         link_elem = card.find("a", href=True)
+        title_elem = card.find("h4")
+        title = title_elem.get_text(strip=True) if title_elem else ""
         link = link_elem["href"] if link_elem else ""
         if link and not link.startswith("http"):
             link = "https://www.olx.pl" + link
+
+        # price
         price_elem = card.find("p", {"data-testid": "ad-price"})
         price = clean_price(price_elem.get_text(strip=True)) if price_elem else ""
+
+        # location and date
         loc_date_elem = card.find("p", {"data-testid": "location-date"})
         loc_date = loc_date_elem.get_text(" ", strip=True) if loc_date_elem else ""
-        results.append({"title": title, "link": link, "price": price, "loc_date": loc_date})
+
+        results.append({
+            "title": title,
+            "link": link,
+            "price": price,
+            "loc_date": loc_date
+        })
+
+    # Get the total number of ads from OLX (e.g. "We found 797 ads")
+    count_elem = soup.find("span", {"data-testid": "total-count"})
+    if count_elem:
+        match = re.search(r"(\d[\d\s]*)", count_elem.get_text())
+        if match:
+            total_count = int(match.group(1).replace(" ", ""))
+            print(f"ℹ️ OLX reports {total_count} ads in the entire search, scraper found {len(results)} on this page.")
+        else:
+            print(f"ℹ️ Scraper found {len(results)} ads on this page (could not read OLX count).")
+    else:
+        print(f"ℹ️ Scraper found {len(results)} ads on this page (OLX counter not found).")
+
     return results
 
 def parse_listing_page(html):
@@ -329,7 +356,7 @@ def main():
     print("🚀 OLX scraper starting")
     token = authenticate_onedrive() if (CLIENT_ID and REFRESH_TOKEN) else None
 
-    # Download previous state + Excel/JSONs
+    # Download previous state and Excel/JSON files
     if token:
         download_from_onedrive(STATE_ONEDRIVE_PATH, STATE_LOCAL, token)
         download_from_onedrive(EXCEL_ACCEPTED_ONEDRIVE, EXCEL_ACCEPTED_LOCAL, token)
@@ -364,9 +391,10 @@ def main():
 
             page = 1
             empty_pages = 0
+            all_results = []  # Collect all ads for this search URL
             while page <= MAX_PAGES and empty_pages < MAX_EMPTY_PAGES:
                 paged = base_url + (f"&page={page}" if "?" in base_url else f"?page={page}")
-                print(" - fetching", paged)
+                print(" - Fetching", paged)
                 r = get_with_retry(paged)
                 if r is None:
                     empty_pages += 1
@@ -381,24 +409,26 @@ def main():
                     time.sleep(random.uniform(1.0, 2.5))
                     continue
 
+                all_results.extend(results)
                 empty_pages = 0
+
                 for res in results:
                     link = res.get("link")
                     if not link:
                         continue
 
                     current_links_found.add(link)
-                    # Sprawdzenie w accepted/rejected bez pobierania strony
+                    # Check in accepted/rejected without fetching the listing page
                     price = res.get("price")
                     in_accepted = link in accepted_map and accepted_map[link]["Price"] == price
                     in_rejected = link in rejected_map and rejected_map[link]["Price"] == price
                     price_diff = link in accepted_map and accepted_map[link]["Price"] != price
 
                     if in_accepted or in_rejected:
-                        # pomiń pobieranie strony
+                        # Skip fetching the listing page
                         continue
 
-                    # fetch listing page
+                    # Fetch listing page
                     lr = get_with_retry(link)
                     if lr is None:
                         continue
@@ -408,7 +438,7 @@ def main():
                     res["search_name"] = name
 
                     if passes_filters(res, search_conf):
-                        # accepted
+                        # Accepted
                         row = {
                             "Title": res.get("title",""),
                             "Price": price,
@@ -427,7 +457,7 @@ def main():
                             row["Title"] += " ⚠️ Price changed"
                             price_changed.append(row)
                     else:
-                        # rejected
+                        # Rejected
                         row = {
                             "Title": res.get("title",""),
                             "Price": price,
@@ -447,15 +477,21 @@ def main():
                 page += 1
                 time.sleep(random.uniform(1.5, 3.0))
 
-    # Usuń ogłoszenia, które już nie istnieją
+            # --- SUMMARY FOR THIS SEARCH URL ---
+            unique_links = set(ad["link"] for ad in all_results if ad.get("link"))
+            print(f"\n📊 Summary for '{name}' ({base_url}):")
+            print(f"Scraper found {len(all_results)} ads (raw, all pages).")
+            print(f"Scraper found {len(unique_links)} unique ads (across all pages).\n")
+
+    # Remove ads that no longer exist
     def filter_existing(json_list):
         return [row for row in json_list if row["Link"] in current_links_found]
 
-    if state.get("last_run"):  # tylko jeśli nie pierwsze uruchomienie
+    if state.get("last_run"):  # Only if not the first run
         accepted_json = filter_existing(accepted_json)
         rejected_json = filter_existing(rejected_json)
 
-    # Zapis lokalny
+    # Local save
     save_json(accepted_json, JSON_ACCEPTED_LOCAL)
     save_json(rejected_json, JSON_REJECTED_LOCAL)
     save_excel(pd.DataFrame(accepted_json), EXCEL_ACCEPTED_LOCAL)
@@ -477,7 +513,7 @@ def main():
     else:
         print("ℹ️ No new accepted listings or price changes")
 
-    # Aktualizacja stanu i upload do OneDrive
+    # Update state and upload to OneDrive
     state = {"seen": list(current_links_found), "last_prices": last_prices, "last_run": int(time.time())}
     save_json(state, STATE_LOCAL)
 
