@@ -100,7 +100,7 @@ REFRESH_TOKEN = os.environ.get("ONEDRIVE_REFRESH_TOKEN")
 TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 ONEDRIVE_UPLOAD_FOLDER = os.environ.get("ONEDRIVE_UPLOAD_FOLDER", "olx")
 
-MAX_PAGES = 30 
+MAX_PAGES = 30
 MAX_EMPTY_PAGES = 2
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -364,7 +364,18 @@ def main():
         download_from_onedrive(JSON_ACCEPTED_ONEDRIVE, JSON_ACCEPTED_LOCAL, token)
         download_from_onedrive(JSON_REJECTED_ONEDRIVE, JSON_REJECTED_LOCAL, token)
 
-    state = load_json(STATE_LOCAL) or {"seen": [], "last_prices": {}, "last_run": int(time.time())}
+    # Load previous state if it exists. Keep state_raw = None when no previous state file.
+    state_raw = None
+    if os.path.exists(STATE_LOCAL):
+        try:
+            state_raw = load_json(STATE_LOCAL)
+            if not isinstance(state_raw, dict) or not state_raw:
+                state_raw = None
+        except Exception:
+            state_raw = None
+
+    # use loaded state when available, otherwise initialize defaults (but mark as no previous run)
+    state = state_raw if state_raw else {"seen": [], "last_prices": {}, "last_run": None}
 
     accepted_json = load_json(JSON_ACCEPTED_LOCAL)
     rejected_json = load_json(JSON_REJECTED_LOCAL)
@@ -487,9 +498,15 @@ def main():
     def filter_existing(json_list):
         return [row for row in json_list if row["Link"] in current_links_found]
 
-    if state.get("last_run"):  # Only if not the first run
+    # Only filter out old entries if we actually loaded previous state from disk
+    if state_raw:
+        before_a = len(accepted_json)
+        before_r = len(rejected_json)
         accepted_json = filter_existing(accepted_json)
         rejected_json = filter_existing(rejected_json)
+        removed_a = before_a - len(accepted_json)
+        removed_r = before_r - len(rejected_json)
+        print(f"ℹ️ Removed {removed_a} accepted entries and {removed_r} rejected entries not found in this run.")
 
     # Local save
     save_json(accepted_json, JSON_ACCEPTED_LOCAL)
