@@ -30,8 +30,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- Config (edytowalne) ---
-# Lista wyszukiwań: każde wyszukiwanie to dict z 'name', 'url' i filtrami
+# --- Config (editable) ---
+# List of searches: each search is a dict with 'name', 'urls' and filters
 SEARCHES = [
     {
         "name": "falownik",
@@ -78,12 +78,12 @@ SEARCHES = [
 
             
         ],
-        "required_words": [],  # jeżeli pusta -> brak wymagań, inaczej co najmniej 1 musi występować
-        "max_price": None,     # liczba lub None
+        "required_words": [],  # if empty -> no requirement, otherwise at least one must appear
+        "max_price": None,     # number or None
         "min_price": None
     },
     {
-        "name": "sprężarka",
+        "name": "sprezarka",
         "urls": ["https://www.olx.pl/oferty/q-spre%C5%BCarka-%C5%9Srubowa/?search%5Bfilter_float_price:to%5D=6000",],
         "forbidden_words": ["wynajem,"],
         "required_words": [],
@@ -100,7 +100,7 @@ REFRESH_TOKEN = os.environ.get("ONEDRIVE_REFRESH_TOKEN")
 TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 ONEDRIVE_UPLOAD_FOLDER = os.environ.get("ONEDRIVE_UPLOAD_FOLDER", "olx")
 
-MAX_PAGES = 30
+MAX_PAGES = 30 
 MAX_EMPTY_PAGES = 2
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
