@@ -27,9 +27,16 @@ import re
 import sys
 import tempfile
 import shutil
+import atexit
 from bs4 import BeautifulSoup
 from collections import defaultdict
 from dotenv import load_dotenv
+
+try:
+    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+except Exception:
+    sync_playwright = None
+    PlaywrightTimeoutError = Exception
 
 load_dotenv()
 
@@ -39,16 +46,16 @@ SEARCHES = [
     {
         "name": "falownik",
         "urls": [
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:to%5D=200",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:to%5D=100",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=201&search%5Bfilter_float_price:to%5D=300",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=301&search%5Bfilter_float_price:to%5D=500",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=501&search%5Bfilter_float_price:to%5D=700",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=701&search%5Bfilter_float_price:to%5D=1000",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1001&search%5Bfilter_float_price:to%5D=1400",
-            # "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1401&search%5Bfilter_float_price:to%5D=2000",
-            # "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2001&search%5Bfilter_float_price:to%5D=2500",
-            # "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2501&search%5Bfilter_float_price:to%5D=3000",
-            # "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=3001&search%5Bfilter_float_price:to%5D=4000"
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1401&search%5Bfilter_float_price:to%5D=2000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2001&search%5Bfilter_float_price:to%5D=2500",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2501&search%5Bfilter_float_price:to%5D=3000",
+            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=3001&search%5Bfilter_float_price:to%5D=4000"
 
         ],
         "forbidden_words": [
@@ -77,7 +84,8 @@ SEARCHES = [
             "odstraszacz", "klimatyzatora", "hybryda", "gyre", "konwerter", "sun lite", "aurora", "mokka", "sunwind", "rav 4",
             "vw id3", "vw id.3", "stecagrid", "micovert", "omnigena", "podgrzewacz", "Jaguar", "mikrofala", "tosima", "maszynka do mięsa",
             "citroen", "jeep", "linde", "steca", "mastervolt", "wózek widłowy", "wózka widłowego", "fluke", "maszynka do mielenia", "porsche",
-            "selfa", "pompy ciepla", "maszynka alfa","kuchenka", "mikrofala", "mikrofalówka", "evershine"
+            "selfa", "pompy ciepla", "maszynka alfa","kuchenka", "mikrofala", "mikrofalówka", "evershine", "licznik energii", "ogranicznik przepięc",
+            "ogrzewacz", "klimatyzator", "solplanet", "effekta"
 
             
         ],
@@ -103,8 +111,12 @@ REFRESH_TOKEN = os.environ.get("ONEDRIVE_REFRESH_TOKEN")
 TOKEN_URL = 'https://login.microsoftonline.com/consumers/oauth2/v2.0/token'
 ONEDRIVE_UPLOAD_FOLDER = os.environ.get("ONEDRIVE_UPLOAD_FOLDER", "olx")
 
-MAX_PAGES = 30
-MAX_EMPTY_PAGES = 2
+MAX_PAGES = int(os.environ.get("MAX_PAGES", "30"))
+MAX_EMPTY_PAGES = int(os.environ.get("MAX_EMPTY_PAGES", "2"))
+OLX_BROWSER_PROFILE = os.path.join(WORKDIR, "olx_browser_profile")
+OLX_HEADLESS = os.environ.get("OLX_HEADLESS", "1").lower() not in {"0", "false", "no"}
+_playwright_runtime = None
+_olx_browser_context = None
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -127,26 +139,170 @@ JSON_REJECTED_LOCAL = os.path.join(WORKDIR, "rejected.json")
 STATE_LOCAL = os.path.join(WORKDIR, "state.json")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; olx-scraper/1.0)",
-    "Accept-Language": "pl-PL,pl;q=0.9"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "DNT": "1",
+    "Upgrade-Insecure-Requests": "1",
+    "Referer": "https://www.olx.pl/",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "sec-ch-ua": '"Not.A/Brand";v="8", "Chromium";v="127", "Google Chrome";v="127"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"'
 }
 
+def close_playwright_session():
+    global _playwright_runtime, _olx_browser_context
+    try:
+        if _olx_browser_context is not None:
+            _olx_browser_context.close()
+    except Exception:
+        pass
+    try:
+        if _playwright_runtime is not None:
+            _playwright_runtime.stop()
+    except Exception:
+        pass
+    _olx_browser_context = None
+    _playwright_runtime = None
+
+
+atexit.register(close_playwright_session)
+
+
+def fetch_with_playwright(url):
+    global _playwright_runtime, _olx_browser_context
+    if sync_playwright is None:
+        print("⚠️ Playwright is not installed. Run: python -m pip install playwright && python -m playwright install chromium")
+        return None
+
+    try:
+        if _olx_browser_context is None:
+            _playwright_runtime = sync_playwright().start()
+            # Keep cookies/local storage between runs. This lets a user complete
+            # an OLX consent or verification step once in a visible browser.
+            _olx_browser_context = _playwright_runtime.chromium.launch_persistent_context(
+                user_data_dir=OLX_BROWSER_PROFILE,
+                headless=OLX_HEADLESS,
+                locale="pl-PL",
+                timezone_id="Europe/Warsaw",
+                viewport={"width": 1440, "height": 1800},
+                user_agent=HEADERS["User-Agent"],
+                java_script_enabled=True,
+                ignore_https_errors=True,
+                args=["--lang=pl-PL"],
+            )
+        context = _olx_browser_context
+        page = context.new_page()
+
+        # The scraper needs the rendered HTML, not images or media. Blocking
+        # these resources prevents OLX's long-running asset requests from
+        # holding navigation open.
+        def handle_route(route):
+            if route.request.resource_type in {"image", "media", "font"}:
+                route.abort()
+            else:
+                route.continue_()
+
+        page.route("**/*", handle_route)
+
+        try:
+            page.goto(url, wait_until="commit", timeout=15000)
+        except PlaywrightTimeoutError:
+            # OLX can leave long-running analytics or challenge requests open
+            # even after the useful results have rendered.
+            print(f"⚠️ Playwright navigation timeout for {url}; inspecting the current DOM.")
+        page.wait_for_timeout(2500)
+
+        # Consent dialogs vary by OLX deployment and locale.
+        for selector in [
+            "button:has-text('Akceptuję')",
+            "button:has-text('Zgadzam się')",
+            "button:has-text('Accept')",
+            "[data-testid='accept-cookies']",
+        ]:
+            try:
+                button = page.locator(selector).first
+                if button.is_visible(timeout=500):
+                    button.click(timeout=1500)
+                    page.wait_for_timeout(800)
+                    break
+            except Exception:
+                pass
+
+        # Wait for both the page to settle and the ad grid to appear.
+        for _ in range(30):
+            try:
+                count = page.locator("a[href*='/d/oferta/'], div[data-cy*='card'], article[data-cy*='card'], li[data-cy*='card'], div[data-testid*='card']").count()
+                if count > 0:
+                    break
+            except Exception:
+                pass
+            page.wait_for_timeout(300)
+
+        html = page.content()
+        final_url = page.url
+        status = page.evaluate("() => document.readyState")
+        title = page.title()
+        cards = page.locator("a[href*='/d/oferta/']").count()
+        blocked = any(marker in (title + " " + html[:5000]).lower() for marker in [
+            "access denied", "forbidden", "captcha", "verify you are human", "robot"
+        ])
+        if blocked and cards == 0:
+            print(f"⚠️ OLX returned a verification/block page for {final_url} (title={title!r}).")
+            if OLX_HEADLESS:
+                print("ℹ️ Set OLX_HEADLESS=0 and open the page once to complete any required browser verification.")
+            page.close()
+            return None
+
+        print(f"ℹ️ Playwright loaded {final_url} (readyState={status}, offer_links={cards})")
+        page.close()
+        return type("ResponseStub", (), {"status_code": 200, "text": html})()
+    except Exception as e:
+        print(f"⚠️ Playwright fallback failed for {url}: {e}")
+        try:
+            if 'page' in locals():
+                page.close()
+        except Exception:
+            pass
+        return None
+
+
 def get_with_retry(url, headers=HEADERS, retries=4, backoff=2.0):
+    if "olx.pl/" in url.lower():
+        print(f"ℹ️ Loading OLX with Playwright: {url}")
+        return fetch_with_playwright(url)
+
+    session = requests.Session()
+    session.headers.update(headers)
     for i in range(retries):
         try:
-            r = requests.get(url, headers=headers, timeout=15)
-            # debug logging: status and short snippet to detect captcha/block
-            if r.status_code != 200:
-                print(f"⚠️ HTTP {r.status_code} for {url} (attempt {i+1}/{retries})")
-                body = (r.text or "")[:300].replace("\n", " ")
-                print("  snippet:", body)
+            r = session.get(url, timeout=15, allow_redirects=True)
             if r.status_code == 200:
                 return r
+            if r.status_code == 403:
+                print("⚠️ HTTP 403 for {}; trying one Playwright fallback".format(url))
+                fb = fetch_with_playwright(url)
+                if fb is not None:
+                    return fb
+                print("⚠️ Playwright could not load the blocked URL; skipping retries for this 403.")
+                return None
+            print("⚠️ HTTP {} for {} (attempt {}/ {})".format(r.status_code, url, i + 1, retries))
+            body = (r.text or "")[:300].replace("\n", " ")
+            print("  snippet:", body)
         except Exception as e:
-            print(f"⚠️ Request error for {url}: {e} (attempt {i+1}/{retries})")
+            print("⚠️ Request error for {}: {} (attempt {}/ {})".format(url, e, i + 1, retries))
         time.sleep(backoff * (1 + random.random()))
-    print(f"❌ Giving up fetching {url} after {retries} attempts")
-    return None
+
+    print("⚠️ Falling back to Playwright after request retries for {}".format(url))
+    return fetch_with_playwright(url)
 
 def update_env_refresh_token(new_token, filename_candidates=None):
     """Atomically update ONEDRIVE_REFRESH_TOKEN in .env with backup; do NOT print token."""
@@ -358,27 +514,148 @@ def is_negotiable(price_str):
         return False
     return bool(re.search(r"do\s*negocj", price_str, re.IGNORECASE))
 
+
+def contains_forbidden_word(text, search_conf):
+    return find_forbidden_word(text, search_conf) is not None
+
+
+def find_forbidden_word(text, search_conf):
+    normalized = normalize_text(text or "")
+    for word in search_conf.get("forbidden_words", []):
+        normalized_word = normalize_text(word)
+        if normalized_word and normalized_word in normalized:
+            return word
+    return None
+
+
+def price_outside_range(price_str, search_conf):
+    price = normalize_price(price_str)
+    if price is None:
+        return False
+    maximum = search_conf.get("max_price")
+    minimum = search_conf.get("min_price")
+    return (maximum is not None and price > maximum) or (minimum is not None and price < minimum)
+
+
+def price_outside_url_range(price_str, url, search_conf):
+    """Apply the price range encoded in the current OLX search URL."""
+    price = normalize_price(price_str)
+    if price is None:
+        return False
+
+    from urllib.parse import parse_qs, urlparse
+
+    query = parse_qs(urlparse(url).query)
+    minimum_values = query.get("search[filter_float_price:from]", [])
+    maximum_values = query.get("search[filter_float_price:to]", [])
+    minimum = int(minimum_values[0]) if minimum_values and minimum_values[0].isdigit() else None
+    maximum = int(maximum_values[0]) if maximum_values and maximum_values[0].isdigit() else None
+
+    if minimum is None and maximum is None:
+        return price_outside_range(price_str, search_conf)
+    return (minimum is not None and price < minimum) or (maximum is not None and price > maximum)
+
 def parse_search_page(html):
     soup = BeautifulSoup(html, "html.parser")
-    # Collect all possible ad containers (l-card, ad-card-title, premium-ad-card, any with "card" in data-cy)
-    cards = soup.find_all("div", {"data-cy": re.compile(r"card")})
+    # OLX search pages have multiple possible card layouts. The old selector was too strict.
+    selectors = [
+        "article",
+        "div[data-cy*='card']",
+        "li[data-cy*='card']",
+        "div[data-testid*='card']",
+        "div[data-testid*='ad-card']",
+        "div[data-testid*='listing']",
+        "div[data-cy*='listing']",
+        "li",
+    ]
+
+    cards = []
+    seen = set()
+    for sel in selectors:
+        for node in soup.select(sel):
+            node_key = str(id(node))
+            if node_key not in seen:
+                cards.append(node)
+                seen.add(node_key)
+
     results = []
+    seen_links = set()
     for card in cards:
-        # link + title
-        link_elem = card.find("a", href=True)
-        title_elem = card.find("h4")
-        title = title_elem.get_text(strip=True) if title_elem else ""
-        link = link_elem["href"] if link_elem else ""
+        # Link: prefer exact offer links, not unrelated navigation links.
+        link_elem = None
+        for candidate in card.select("a[href]"):
+            href = candidate.get("href", "")
+            if "/d/oferta/" in href or "/oferta/" in href:
+                link_elem = candidate
+                break
+        if link_elem is None:
+            continue
+
+        link = link_elem.get("href", "") if link_elem else ""
         if link and not link.startswith("http"):
-            link = "https://www.olx.pl" + link
+            if link.startswith("//"):
+                link = "https:" + link
+            else:
+                link = "https://www.olx.pl" + link
 
-        # price
-        price_elem = card.find("p", {"data-testid": "ad-price"})
-        price = clean_price(price_elem.get_text(strip=True)) if price_elem else ""
+        normalized_card_link = normalize_link(link)
+        if not normalized_card_link or normalized_card_link in seen_links:
+            continue
+        seen_links.add(normalized_card_link)
 
-        # location and date
-        loc_date_elem = card.find("p", {"data-testid": "location-date"})
+        # Title: several OLX variants use h6/h5/h4 or title attributes.
+        title_elem = None
+        for selector in [
+            "h6", "h5", "h4", "h3", "h2",
+            "[data-testid*='title']",
+            "[data-cy*='title']",
+            "[class*='title']",
+            "[class*='ad-title']",
+            "[class*='listing-title']",
+        ]:
+            title_elem = card.select_one(selector)
+            if title_elem:
+                break
+        if title_elem is None and link_elem is not None:
+            title_elem = link_elem
+        title = clean_price(title_elem.get_text(" ", strip=True)) if title_elem else ""
+
+        # Price: many OLX cards expose this in a few different data-testid names.
+        price_elem = None
+        for selector in [
+            "p[data-testid='ad-price']",
+            "div[data-testid='ad-price']",
+            "span[data-testid='ad-price']",
+            "p[data-testid*='price']",
+            "div[data-testid*='price']",
+            "span[data-testid*='price']",
+            "strong",
+            "[class*='price']",
+        ]:
+            price_elem = card.select_one(selector)
+            if price_elem:
+                break
+        price = clean_price(price_elem.get_text(" ", strip=True)) if price_elem else ""
+
+        # Location/date: sometimes stored in a single element, sometimes split into multiple nodes.
+        loc_date_elem = None
+        for selector in [
+            "p[data-testid='location-date']",
+            "div[data-testid='location-date']",
+            "span[data-testid='location-date']",
+            "p[data-testid*='location']",
+            "[data-testid*='location']",
+            "[data-testid*='date']",
+            "[class*='location']",
+            "[class*='date']",
+        ]:
+            loc_date_elem = card.select_one(selector)
+            if loc_date_elem:
+                break
         loc_date = loc_date_elem.get_text(" ", strip=True) if loc_date_elem else ""
+
+        if not link and not title and not price:
+            continue
 
         results.append({
             "title": title,
@@ -403,35 +680,101 @@ def parse_search_page(html):
 
 def parse_listing_page(html):
     soup = BeautifulSoup(html, "html.parser")
-    desc_elem = soup.find("div", {"data-cy": "ad_description"})
-    if not desc_elem:
-        desc_elem = soup.find("div", {"class": lambda x: x and "description" in x})
-    description = desc_elem.get_text(" ", strip=True) if desc_elem else ""
+    description = ""
+
+    # Prefer JSON-LD/structured metadata when available.
+    for script in soup.select("script[type='application/ld+json']"):
+        try:
+            payload = json.loads(script.string or script.get_text())
+            if isinstance(payload, dict):
+                data = payload.get("description") or payload.get("articleBody")
+                if data:
+                    description = str(data).strip()
+                    break
+            elif isinstance(payload, list):
+                for item in payload:
+                    if isinstance(item, dict):
+                        data = item.get("description") or item.get("articleBody")
+                        if data:
+                            description = str(data).strip()
+                            break
+                if description:
+                    break
+        except Exception:
+            pass
+
+    if not description:
+        desc_elem = soup.find("div", {"data-cy": "ad_description"})
+        if not desc_elem:
+            desc_elem = soup.find("div", {"data-testid": "ad-description"})
+        if not desc_elem:
+            desc_elem = soup.find("div", {"class": lambda x: x and "description" in x})
+        if not desc_elem:
+            desc_elem = soup.find("div", {"class": lambda x: x and "description" in x.lower() if isinstance(x, str) else False})
+        if not desc_elem:
+            desc_elem = soup.select_one("div[class*='description']")
+        if not desc_elem:
+            # Last fallback: any paragraph-like block around the ad content.
+            for sel in ["div[data-testid*='description']", "div[id*='description']", "div[itemprop='description']", "p"]:
+                candidate = soup.select_one(sel)
+                if candidate and len(candidate.get_text(" ", strip=True)) > 80:
+                    desc_elem = candidate
+                    break
+        description = desc_elem.get_text(" ", strip=True) if desc_elem else ""
+
     image_url = None
     meta_img = soup.find("meta", property="og:image")
     if meta_img and meta_img.has_attr("content"):
         image_url = meta_img["content"]
     else:
-        img = soup.find("img", {"class": lambda x: x and ("swiper" in x or "image" in x or "gallery" in x)})
+        img = soup.find("img", {"class": lambda x: x and any(token in x.lower() for token in ["swiper", "image", "gallery", "photo"])})
         if img and img.has_attr("src"):
             image_url = img["src"]
         else:
-            gallery_img = soup.select_one("div.photos img")
+            gallery_img = soup.select_one("div.photos img, div.gallery img, img[data-src], img[src]")
             if gallery_img and gallery_img.has_attr("src"):
                 image_url = gallery_img["src"]
+
+    if not image_url:
+        for script in soup.select("script[type='application/ld+json']"):
+            try:
+                payload = json.loads(script.string or script.get_text())
+                images = []
+                if isinstance(payload, dict):
+                    images = payload.get("image", [])
+                    if isinstance(images, str):
+                        images = [images]
+                elif isinstance(payload, list):
+                    for item in payload:
+                        if isinstance(item, dict):
+                            val = item.get("image")
+                            if isinstance(val, str):
+                                images.append(val)
+                            elif isinstance(val, list):
+                                images.extend(val)
+                if images:
+                    image_url = images[0]
+                    break
+            except Exception:
+                pass
+
     return description, image_url
 
 def normalize_text(text):
-    text = text.lower()
+    text = text.casefold()
     text = re.sub(r'[^a-z0-9\s]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 def passes_filters(item, search_conf):
-    text = normalize_text(item.get("title","") + " " + item.get("description",""))
-    for bad in search_conf.get("forbidden_words", []):
-        if normalize_text(bad) in text:
-            return False
+    title = item.get("title", "")
+    description = item.get("description", "")
+    if find_forbidden_word(title, search_conf) is not None:
+        return False
+    if find_forbidden_word(description, search_conf) is not None:
+        return False
+
+    text = normalize_text(title + " " + description)
     reqs = search_conf.get("required_words", [])
     if reqs and not any(normalize_text(r) in text for r in reqs):
         return False
@@ -632,6 +975,7 @@ def main():
     print(f"main.py v{__version__} ({__version_date__})")
 
     print("🚀 OLX scraper starting")
+    print(f"ℹ️ Maximum pages per search: {MAX_PAGES}")
     token = authenticate_onedrive() if (CLIENT_ID and REFRESH_TOKEN) else None
 
     # If we have OneDrive token, try to download remote files.
@@ -742,6 +1086,10 @@ def main():
                     price_num = normalize_price(price_raw)
                     negotiable = is_negotiable(price_raw)
 
+                    if price_outside_url_range(price_raw, paged, search_conf):
+                        print(f"ℹ️ Skipping offer outside the price range from URL: {price_raw}")
+                        continue
+
                     acc_row = accepted_map.get(norm_link)
                     rej_row = rejected_map.get(norm_link)
                     acc_price_raw = acc_row.get("Price") if acc_row else None
@@ -768,14 +1116,26 @@ def main():
                         # Skip fetching the listing page
                         continue
 
-                    # Fetch listing page
-                    lr = get_with_retry(raw_link)
-                    if lr is None:
-                        continue
-                    description, image_url = parse_listing_page(lr.text)
+                    # Reject obvious matches from the search card before opening
+                    # the listing page. This is the main speed-up for forbidden titles.
+                    forbidden_in_title = find_forbidden_word(res.get("title", ""), search_conf)
+                    skip_details = forbidden_in_title is not None
+                    description = ""
+                    image_url = None
+                    if not skip_details:
+                        lr = get_with_retry(raw_link)
+                        if lr is None:
+                            continue
+                        description, image_url = parse_listing_page(lr.text)
+                    else:
+                        print(f"ℹ️ Skipping listing details: title/price already rejected: {res.get('title', '')[:100]}")
                     res["description"] = description
                     res["image"] = image_url
                     res["search_name"] = name
+
+                    forbidden_in_description = find_forbidden_word(description, search_conf)
+                    if forbidden_in_description is not None and forbidden_in_title is None:
+                        print(f"ℹ️ Rejecting listing because forbidden word was found in description: {forbidden_in_description}")
 
                     if passes_filters(res, search_conf):
                         # Accepted
