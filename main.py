@@ -53,9 +53,9 @@ SEARCHES = [
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=701&search%5Bfilter_float_price:to%5D=1000",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1001&search%5Bfilter_float_price:to%5D=1400",
             "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=1401&search%5Bfilter_float_price:to%5D=2000",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2001&search%5Bfilter_float_price:to%5D=2500",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2501&search%5Bfilter_float_price:to%5D=3000",
-            "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=3001&search%5Bfilter_float_price:to%5D=4000"
+            # "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2001&search%5Bfilter_float_price:to%5D=2500",
+            # "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=2501&search%5Bfilter_float_price:to%5D=3000",
+            # "https://www.olx.pl/oferty/q-falownik/?search%5Bfilter_float_price:from%5D=3001&search%5Bfilter_float_price:to%5D=4000"
 
         ],
         "forbidden_words": [
@@ -504,7 +504,7 @@ def normalize_price(price_str):
     if not m:
         return None
     try:
-        return int(m.group(1).replace(" ", ""))
+        return int(re.sub(r"\s+", "", m.group(1)))
     except Exception:
         return None
 
@@ -852,6 +852,60 @@ def normalize_link(url):
         path = "/"
     return f"{scheme}://{netloc}{path}"
 
+def merge_excel_records(records, dataframe):
+    existing_links = {
+        row.get("NormLink") or normalize_link(row.get("Link"))
+        for row in records
+        if row.get("Link")
+    }
+    for row in dataframe.to_dict(orient="records"):
+        row = {key: value for key, value in row.items() if not pd.isna(value)}
+        link = row.get("Link")
+        if not isinstance(link, str) or not link.strip():
+            continue
+        norm_link = row.get("NormLink")
+        if not isinstance(norm_link, str) or not norm_link.strip():
+            norm_link = normalize_link(link)
+        if norm_link and norm_link not in existing_links:
+            row["NormLink"] = norm_link
+            records.append(row)
+            existing_links.add(norm_link)
+
+def prices_equal(a_num, a_raw, b_num, b_raw):
+    if a_num is not None and b_num is not None:
+        return a_num == b_num
+    return (a_raw or "").strip() == (b_raw or "").strip()
+
+def should_fetch_listing_details(norm_link, price_raw, accepted_map, rejected_map):
+    if norm_link in rejected_map:
+        return False
+    accepted_row = accepted_map.get(norm_link)
+    if accepted_row is None:
+        return True
+    accepted_price = accepted_row.get("Price")
+    return not prices_equal(
+        normalize_price(accepted_price),
+        accepted_price,
+        normalize_price(price_raw),
+        price_raw,
+    )
+
+def upsert_listing(records, norm_link, row, other_records=None):
+    for existing in records:
+        existing_link = existing.get("NormLink") or normalize_link(existing.get("Link"))
+        if existing_link == norm_link:
+            existing.update(row)
+            return existing
+    if other_records is not None:
+        for index, existing in enumerate(other_records):
+            existing_link = existing.get("NormLink") or normalize_link(existing.get("Link"))
+            if existing_link == norm_link:
+                existing.update(row)
+                records.append(other_records.pop(index))
+                return existing
+    records.append(row)
+    return row
+
 def abort_with_notification(msg):
     print("❌ ABORT:", msg)
     try:
@@ -1012,6 +1066,8 @@ def main():
     rejected_json = load_json(JSON_REJECTED_LOCAL)
     accepted_df = load_excel(EXCEL_ACCEPTED_LOCAL)
     rejected_df = load_excel(EXCEL_REJECTED_LOCAL)
+    merge_excel_records(accepted_json, accepted_df)
+    merge_excel_records(rejected_json, rejected_df)
 
     # Ensure MissingCount exists for existing entries
     for row in accepted_json:
@@ -1093,27 +1149,19 @@ def main():
                     acc_row = accepted_map.get(norm_link)
                     rej_row = rejected_map.get(norm_link)
                     acc_price_raw = acc_row.get("Price") if acc_row else None
-                    rej_price_raw = rej_row.get("Price") if rej_row else None
                     acc_price_num = normalize_price(acc_price_raw)
-                    rej_price_num = normalize_price(rej_price_raw)
-
-                    def prices_equal(a_num, a_raw, b_num, b_raw):
-                        # Prefer numeric comparison when both available, fallback to raw string compare
-                        if a_num is not None and b_num is not None:
-                            return a_num == b_num
-                        return (a_raw or "").strip() == (b_raw or "").strip()
 
                     in_accepted = acc_row is not None and prices_equal(acc_price_num, acc_price_raw, price_num, price_raw)
-                    in_rejected = rej_row is not None and prices_equal(rej_price_num, rej_price_raw, price_num, price_raw)
                     price_diff = acc_row is not None and not prices_equal(acc_price_num, acc_price_raw, price_num, price_raw)
 
-                    if (acc_row or rej_row) and (not in_accepted and not in_rejected):
-                        # existing record present but price differs -> debug info
-                        stored = acc_price_raw or rej_price_raw
-                        print(f"ℹ️ Existing record for {norm_link} found but price differs (stored: {stored} vs current: {price_raw}).")
+                    if acc_row is not None and not in_accepted:
+                        print(f"ℹ️ Existing accepted record for {norm_link} found but price differs (stored: {acc_price_raw} vs current: {price_raw}).")
 
-                    if in_accepted or in_rejected:
-                        # Skip fetching the listing page
+                    if not should_fetch_listing_details(norm_link, price_raw, accepted_map, rejected_map):
+                        if rej_row is not None:
+                            print(f"ℹ️ Skipping known rejected listing: {res.get('title', '')[:100]}")
+                        else:
+                            print(f"ℹ️ Skipping listing with unchanged accepted price: {res.get('title', '')[:100]}")
                         continue
 
                     # Reject obvious matches from the search card before opening
@@ -1153,12 +1201,12 @@ def main():
                             "MissingCount": 0,
                             "Timestamp": int(time.time())
                         }
-                        accepted_json.append(row)
+                        row = upsert_listing(accepted_json, norm_link, row, rejected_json)
                         accepted_map[norm_link] = row
-                        new_accepted.append(row)
                         if price_diff:
-                            row["Title"] += " ⚠️ Price changed"
                             price_changed.append(row)
+                        else:
+                            new_accepted.append(row)
                     else:
                         # Rejected
                         row = {
@@ -1174,9 +1222,10 @@ def main():
                             "MissingCount": 0,
                             "Timestamp": int(time.time())
                         }
-                        rejected_json.append(row)
+                        row = upsert_listing(rejected_json, norm_link, row, accepted_json)
                         rejected_map[norm_link] = row
-                        new_rejected.append(row)
+                        if rej_row is None:
+                            new_rejected.append(row)
 
                     # store numeric price when possible
                     last_prices[norm_link] = price_num if price_num is not None else (price_raw or "")
@@ -1272,18 +1321,40 @@ def main():
         atomic_save_excel(df_rej, EXCEL_REJECTED_LOCAL)
 
     # 🔄 Notifications
-    to_notify = new_accepted + price_changed
+    to_notify = [(item, item["Title"]) for item in new_accepted]
+    to_notify.extend(
+        (item, f'{item["Title"]} ⚠️ Price changed')
+        for item in price_changed
+    )
     if to_notify:
         print(f"🔔 New accepted listings or price changes: {len(to_notify)} - sending notifications")
-        for item in to_notify:
+        for item, notification_title in to_notify:
             ok = send_telegram_notification(
-                title=item["Title"],
+                title=notification_title,
                 price=item["Price"],
                 link=item["Link"],
                 photo_url=item.get("Image")
             )
             item["Notified"] = ok
             time.sleep(1.2 + random.random())
+        atomic_save_json(accepted_json, JSON_ACCEPTED_LOCAL)
+        atomic_save_excel(pd.DataFrame(accepted_json), EXCEL_ACCEPTED_LOCAL)
+        if token:
+            refreshed = authenticate_onedrive()
+            if refreshed:
+                tmp_acc_json = write_temp_json(accepted_json, JSON_ACCEPTED_LOCAL)
+                tmp_acc_xlsx = write_temp_excel(pd.DataFrame(accepted_json), EXCEL_ACCEPTED_LOCAL)
+                synced = upload_temps_and_commit(refreshed, [
+                    (tmp_acc_json, JSON_ACCEPTED_LOCAL, JSON_ACCEPTED_ONEDRIVE),
+                    (tmp_acc_xlsx, EXCEL_ACCEPTED_LOCAL, EXCEL_ACCEPTED_ONEDRIVE),
+                ])
+                if not synced:
+                    for tmp_path in (tmp_acc_json, tmp_acc_xlsx):
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                    print("⚠️ Could not sync Telegram notification status to OneDrive.")
+            else:
+                print("⚠️ Could not refresh OneDrive credentials to sync notification status.")
     else:
         print("ℹ️ No new accepted listings or price changes")
 

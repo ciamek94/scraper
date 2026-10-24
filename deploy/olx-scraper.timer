@@ -1,0 +1,14 @@
+[Unit]
+Description=Schedule OLX scraper
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+OnCalendar=*-*-* 11:00:00
+OnCalendar=*-*-* 15:00:00
+OnCalendar=*-*-* 20:00:00
+Persistent=true
+AccuracySec=1min
+Unit=olx-scraper.service
+
+[Install]
+WantedBy=timers.target

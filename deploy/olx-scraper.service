@@ -1,0 +1,11 @@
+[Unit]
+Description=OLX scraper
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/scraper_olx
+ExecStart=/home/pi/scraper_olx/run_scraper.sh
+Environment=PYTHONUNBUFFERED=1
