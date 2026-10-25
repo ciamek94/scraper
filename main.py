@@ -41,7 +41,8 @@ except Exception:
 load_dotenv()
 
 # --- Config (editable) ---
-# List of searches: each search is a dict with 'name', 'urls' and filters
+# Built-in fallback searches, used only when searches.json is unavailable
+# both on OneDrive and locally. The primary source is searches.json.
 SEARCHES = [
     {
         "name": "falownik",
@@ -101,6 +102,17 @@ SEARCHES = [
     #     "max_price": None,
     #     "min_price": None
     # }
+    {
+        "name": "zageszczarka",
+        "urls": [
+            "https://www.olx.pl/oferty/q-zag%C4%99szczarka/?search%5Bfilter_float_price:to%5D=3000&search%5Bfilter_enum_state%5D%5B0%5D=used",
+            "https://www.olx.pl/oferty/q-zag%C4%99szczarka/?search%5Bfilter_float_price:from%5D=3000&search%5Bfilter_float_price:to%5D=6000&search%5Bfilter_enum_state%5D%5B0%5D=used",
+        ],
+        "forbidden_words": [],
+        "required_words": [],
+        "max_price": None,
+        "min_price": None,
+    },
 ]
 
 WORKDIR = "output"
@@ -117,6 +129,8 @@ OLX_BROWSER_PROFILE = os.path.join(WORKDIR, "olx_browser_profile")
 OLX_HEADLESS = os.environ.get("OLX_HEADLESS", "1").lower() not in {"0", "false", "no"}
 _playwright_runtime = None
 _olx_browser_context = None
+_playwright_fetch_count = 0
+PLAYWRIGHT_RECYCLE_AFTER = int(os.environ.get("PLAYWRIGHT_RECYCLE_AFTER", "20"))
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -130,6 +144,8 @@ EXCEL_REJECTED_ONEDRIVE = f"{ONEDRIVE_UPLOAD_FOLDER}/rejected.xlsx"
 JSON_ACCEPTED_ONEDRIVE = f"{ONEDRIVE_UPLOAD_FOLDER}/accepted.json"
 JSON_REJECTED_ONEDRIVE = f"{ONEDRIVE_UPLOAD_FOLDER}/rejected.json"
 STATE_ONEDRIVE_PATH = f"{ONEDRIVE_UPLOAD_FOLDER}/state.json"
+SEARCHES_ONEDRIVE_PATH = f"{ONEDRIVE_UPLOAD_FOLDER}/searches.json"
+SEARCHES_LOCAL = os.path.join(WORKDIR, "searches.json")
 
 # Local paths
 EXCEL_ACCEPTED_LOCAL = os.path.join(WORKDIR, "accepted.xlsx")
@@ -178,7 +194,11 @@ atexit.register(close_playwright_session)
 
 
 def fetch_with_playwright(url):
-    global _playwright_runtime, _olx_browser_context
+    global _playwright_runtime, _olx_browser_context, _playwright_fetch_count
+    # Recycle the browser periodically so memory leaks cannot accumulate on low-RAM devices.
+    if _olx_browser_context is not None and _playwright_fetch_count >= PLAYWRIGHT_RECYCLE_AFTER:
+        close_playwright_session()
+    _playwright_fetch_count += 1
     if sync_playwright is None:
         print("⚠️ Playwright is not installed. Run: python -m pip install playwright && python -m playwright install chromium")
         return None
@@ -193,12 +213,24 @@ def fetch_with_playwright(url):
                 headless=OLX_HEADLESS,
                 locale="pl-PL",
                 timezone_id="Europe/Warsaw",
-                viewport={"width": 1440, "height": 1800},
+                viewport={"width": 1280, "height": 1024},
                 user_agent=HEADERS["User-Agent"],
                 java_script_enabled=True,
                 ignore_https_errors=True,
-                args=["--lang=pl-PL"],
+                args=[
+                    "--lang=pl-PL",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--disable-sync",
+                    "--no-first-run",
+                    "--mute-audio",
+                    "--renderer-process-limit=1",
+                    "--blink-settings=imagesEnabled=false",
+                ],
             )
+            _playwright_fetch_count = 0
         context = _olx_browser_context
         page = context.new_page()
 
@@ -459,6 +491,41 @@ def download_from_onedrive(onedrive_path, local_path, token):
     else:
         print("ℹ️ File not found on OneDrive (or download failed):", onedrive_path, r.status_code)
         return False
+
+def load_searches(token):
+    """Load search definitions from OneDrive searches.json, then local copy, then built-in defaults."""
+    if token:
+        download_from_onedrive(SEARCHES_ONEDRIVE_PATH, SEARCHES_LOCAL, token)
+    if not os.path.exists(SEARCHES_LOCAL) and os.path.exists("searches.json"):
+        shutil.copyfile("searches.json", SEARCHES_LOCAL)
+        print("ℹ️ Using bundled searches.json as the local copy.")
+    if os.path.exists(SEARCHES_LOCAL):
+        try:
+            with open(SEARCHES_LOCAL, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data = data.get("searches", [])
+            valid = []
+            for s in data:
+                urls = s.get("urls") or ([s["url"]] if s.get("url") else [])
+                if not s.get("name") or not urls:
+                    print(f"⚠️ Skipping invalid search entry: {s!r}")
+                    continue
+                s["urls"] = urls
+                s.setdefault("forbidden_words", [])
+                s.setdefault("required_words", [])
+                s.setdefault("max_price", None)
+                s.setdefault("min_price", None)
+                valid.append(s)
+            if valid:
+                print(f"ℹ️ Loaded {len(valid)} search(es) from {SEARCHES_LOCAL}")
+                return valid
+            print("⚠️ searches.json contains no valid searches; using built-in defaults.")
+        except Exception as e:
+            print(f"⚠️ Could not read searches.json ({e}); using built-in defaults.")
+    else:
+        print("ℹ️ searches.json not found; using built-in defaults.")
+    return SEARCHES
 
 def send_telegram_notification(title, price, link, photo_url=None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -1091,7 +1158,8 @@ def main():
     new_rejected = []
     price_changed = []
 
-    for search_conf in SEARCHES:
+    searches = load_searches(token)
+    for search_conf in searches:
         name = search_conf["name"]
         urls = search_conf.get("urls", [search_conf.get("url")])
         for base_url in urls:
